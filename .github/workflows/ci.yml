@@ -14,7 +14,12 @@ jobs:
   core:
     if: github.event_name == 'workflow_dispatch' && inputs.core_ref != ''
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        task: [test, typecheck]
+    name: core-${{ matrix.task }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -27,7 +32,7 @@ jobs:
           package-manager-cache: false
       - run: npm install --global pnpm@9.15.0 --ignore-scripts
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec turbo run typecheck test --concurrency=2 --filter=@bb/provider-bridge-acp --filter=@bb/provider-bridge-protocol --filter=@bb/agent-runtime --filter=@bb/host-daemon-contract --filter=@get-bb/plugin-sdk --filter=@bb/server --filter=@bb/app --filter=bb-plugin-provider-codex --filter=bb-plugin-thread-list --filter=bb-plugin-account-pool --output-logs=errors-only
+      - run: pnpm exec turbo run ${{ matrix.task }} --continue --concurrency=2 --filter=@bb/provider-bridge-acp --filter=@bb/provider-bridge-protocol --filter=@bb/agent-runtime --filter=@bb/host-daemon-contract --filter=@get-bb/plugin-sdk --filter=@bb/server --filter=@bb/app --filter=bb-plugin-provider-codex --filter=bb-plugin-thread-list --filter=bb-plugin-account-pool --output-logs=full
   verify:
     runs-on: ubuntu-latest
     steps:
