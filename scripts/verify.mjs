@@ -38,9 +38,7 @@ for (const plugin of collection.plugins) {
       task === "ci"
         ? ["ci", "--no-audit", "--no-fund", "--legacy-peer-deps"]
         : task === "audit"
-          ? manifest.scripts?.audit
-            ? ["run", "audit"]
-            : ["audit", "--audit-level=high"]
+          ? ["audit", "--audit-level=high"]
           : task === "install"
             ? ["install", "--no-audit", "--no-fund", "--legacy-peer-deps"]
             : ["run", task === "format" ? "format:check" : task];
