@@ -1,8 +1,33 @@
 name: CI
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      core_ref:
+        description: Optional compatible hxy91819/bb source commit for core regression checks
+        required: false
+        type: string
 permissions:
   contents: read
 jobs:
+  core:
+    if: github.event_name == 'workflow_dispatch' && inputs.core_ref != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hxy91819/bb
+          ref: ${{ inputs.core_ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.23.2
+          package-manager-cache: false
+      - run: npm install --global pnpm@9.15.0 --ignore-scripts
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec turbo run typecheck test --concurrency=2 --filter=@bb/provider-bridge-acp --filter=@bb/provider-bridge-protocol --filter=@bb/agent-runtime --filter=@bb/host-daemon-contract --filter=@get-bb/plugin-sdk --filter=@bb/server --filter=@bb/app --filter=bb-plugin-provider-codex --filter=bb-plugin-thread-list --filter=bb-plugin-account-pool --output-logs=errors-only
   verify:
     runs-on: ubuntu-latest
     steps:
