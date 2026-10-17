@@ -15,14 +15,21 @@ jobs:
           cache: npm
           cache-dependency-path: plugins/*/package-lock.json
       - run: node scripts/fetch-runtime.mjs "$RUNNER_TEMP/bb-plugins-runtime"
-      - run: node scripts/verify.mjs ci
+      - id: install
+        run: node scripts/verify.mjs ci
       - run: for script in scripts/*.mjs; do node --check "$script"; done
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run build
-      - run: npm run format:check
-      - run: node scripts/verify.mjs audit
+      - if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run lint
+      - if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run typecheck
+      - if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm test
+      - if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run build
+      - if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run format:check
+      - if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: node scripts/verify.mjs audit
   secrets:
     runs-on: ubuntu-latest
     steps:

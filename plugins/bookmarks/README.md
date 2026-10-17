@@ -6,7 +6,7 @@
 
 
 Save conversation text as bookmarks, browse by project, and jump back to the source message.
-Install with `bb plugin install https://github.com/hxy91819/bb-plugin-bookmarks`.
+Install with `bb plugin install git:https://github.com/hxy91819/bb-plugins.git@main --plugin bookmarks`.
 Use **Add bookmark** on a message or selected assistant reply text, then open **Bookmarks**
 in the right panel to search, copy, edit notes, or delete entries.
 
@@ -33,7 +33,7 @@ valid saved titles are preserved.
 需要支持 SDK 0.6.37 的 BB、Node.js 22 或更新版本及 npm：
 
 ```sh
-bb plugin install https://github.com/hxy91819/bb-plugin-bookmarks
+bb plugin install git:https://github.com/hxy91819/bb-plugins.git@main --plugin bookmarks
 ```
 
 安装会跟踪仓库默认分支，BB 自动安装运行依赖并构建前后端。
@@ -78,7 +78,7 @@ npm test
 npm run build
 ```
 
-SDK 固定为公开 npm 包 `@get-bb/plugin-sdk@0.6.37`，放在 `dependencies`：共享 RPC 契约在浏览器运行时需要 SDK 根包，而 Git 安装只安装运行依赖（忽略安装脚本）。不需要提交 `dist/`。消息定位扩展依据配套 BB 源码契约，以结构化选项调用，同时兼容尚未包含该选项的公开声明。
+SDK 固定为集合兼容基线的公开 BB fork Release tarball（SDK 0.6.37），放在 `dependencies`：共享 RPC 契约在浏览器运行时需要 SDK 根包，而 Git 安装只安装运行依赖（忽略安装脚本）。不需要提交 `dist/`。消息定位扩展依据配套 BB 源码契约，以结构化选项调用，同时兼容尚未包含该选项的公开声明。
 
 面板分批读取匹配书签（每次最多 200 条），统一分组排序；组内按创建时间倒序，其余组按最近书签出现顺序。新增定位和高亮只保留在当前浏览器会话，不写入标签参数，连续新增会复用同一个标签页。
 

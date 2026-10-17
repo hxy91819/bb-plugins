@@ -88,7 +88,7 @@ try {
       "scripts",
       "release",
     ],
-    { cwd: root },
+    { cwd: git("rev-parse", "--show-toplevel") },
   );
   execFileSync("tar", ["-xf", sourceTar, "-C", stage]);
   await run("npm", [

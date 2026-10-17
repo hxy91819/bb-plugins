@@ -83,9 +83,9 @@ export function registerUsageSource(bb: BbPluginApi) {
           observedAt:
             usage.status === "ok" ? Date.now() : (previous?.observedAt ?? null),
           usage: {
-            accountEmail: null,
-            planLabel: null,
             ...usage,
+            accountEmail: usage.accountEmail ?? null,
+            planLabel: usage.planLabel ?? null,
             plan: metadata.plan,
             ...(usage.status === "ok"
               ? {
