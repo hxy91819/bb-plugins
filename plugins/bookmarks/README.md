@@ -1,3 +1,5 @@
+> 本插件已迁入 [hxy91819/bb-plugins](https://github.com/hxy91819/bb-plugins/tree/main/plugins/bookmarks)。新装使用 `bb plugin install git:https://github.com/hxy91819/bb-plugins.git@main --plugin bookmarks`；已有安装按集合仓库的迁移说明保留配置与数据。下文旧 Release 记录保留作来源证据。
+
 # Bookmarks / 书签 · BB plugin
 
 将会话文字存为书签，按项目查看，并回到原会话的原消息。独立插件，运行时仅使用公开 `@get-bb/plugin-sdk`，数据保存在 BB 为插件提供的 SQLite 中。

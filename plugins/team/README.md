@@ -1,3 +1,5 @@
+> 本插件已迁入 [hxy91819/bb-plugins](https://github.com/hxy91819/bb-plugins/tree/main/plugins/team)。新装使用 `bb plugin install git:https://github.com/hxy91819/bb-plugins.git@main --plugin team`；已有安装按集合仓库的迁移说明保留配置与数据。下文旧 Release 记录保留作来源证据。
+
 # bb-team
 
 Independent BB plugin for trusted, self-selected team members, native thread
@@ -90,8 +92,8 @@ Requires the matching BB runtime with Node 24. `npm ci` installs the fork SDK
 from its immutable Release URL; no candidate overlay is needed.
 
 ```bash
-git clone https://github.com/hxy91819/bb-team.git
-cd bb-team
+git clone https://github.com/hxy91819/bb-plugins.git
+cd bb-plugins/plugins/team
 export BB_TEAM_RUNTIME_DIR='/absolute/path/to/extracted/bb-runtime'
 export PATH="$BB_TEAM_RUNTIME_DIR/bin:$PATH"
 npm ci

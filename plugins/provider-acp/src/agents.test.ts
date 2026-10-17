@@ -89,7 +89,7 @@ describe("parseCustomAcpAgents", () => {
           id: "cursor-sdk",
           displayName: "Cursor (SDK)",
           command: "node",
-          icon: "provider-acp/cursor",
+          icon: "acp-extensions/cursor",
           iconTint: { light: "#111827", dark: "#F5F5F5" },
         },
         { id: "amp", displayName: "Amp", command: "amp" },
@@ -99,7 +99,7 @@ describe("parseCustomAcpAgents", () => {
 
     expect(parsed.problems).toEqual([]);
     expect(parsed.agents[0]).toMatchObject({
-      icon: "provider-acp/cursor",
+      icon: "acp-extensions/cursor",
       iconTint: { light: "#111827", dark: "#F5F5F5" },
     });
     expect(parsed.agents[1]).not.toHaveProperty("iconTint");
@@ -201,7 +201,7 @@ describe("customAcpAgentDefinition", () => {
           id: "cursor-sdk",
           displayName: "Cursor (SDK)",
           command: "node",
-          icon: "provider-acp/cursor",
+          icon: "acp-extensions/cursor",
           iconTint: { light: "#111827", dark: "#F5F5F5" },
         },
       ],
@@ -210,10 +210,10 @@ describe("customAcpAgentDefinition", () => {
     if (agent === undefined) throw new Error("expected the agent to parse");
 
     const definition = customAcpAgentDefinition(agent);
-    expect(definition.icon).toBe("provider-acp/cursor");
+    expect(definition.icon).toBe("acp-extensions/cursor");
     expect(definition.iconTint).toEqual({ light: "#111827", dark: "#F5F5F5" });
     const declaration = acpProviderDeclaration(definition);
-    expect(declaration.icon).toBe("provider-acp/cursor");
+    expect(declaration.icon).toBe("acp-extensions/cursor");
     expect(declaration.strings?.iconTint).toEqual(definition.iconTint);
   });
 

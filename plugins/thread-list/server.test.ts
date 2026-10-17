@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import plugin, { migrateFromUiPreferences } from "./server.js";
 import { defaultPreferences } from "./shared/preferences.js";
 
-const PLUGIN_ID = "thread-list";
+const PLUGIN_ID = "thread-list-extras";
 
 function setup(
   options: {
@@ -210,7 +210,7 @@ describe("thread-list preferences rpc", () => {
       }),
     ).resolves.toEqual({
       key: "rowActions",
-      value: ["thread-list/move", "push-notifications/level"],
+      value: ["thread-list-extras/move", "push-notifications/level"],
     });
     await expect(
       harness.behavior.callRpc("setPreference", {
@@ -243,7 +243,7 @@ describe("thread-list preferences rpc", () => {
     };
     expect(listed.preferences.rowActions).toEqual([
       "bb--core/pin",
-      "thread-list/move",
+      "thread-list-extras/move",
       "bb--core/rename",
     ]);
   });
@@ -310,7 +310,7 @@ describe("bb thread-list prefs", () => {
     const builtIn = setup();
     await plugin(builtIn.bb);
     expect(builtIn.harness.inspection.registrations.cli?.name).toBe(
-      "thread-list",
+      "thread-list-extras",
     );
 
     const copy = createFakePluginHost({ pluginId: "my-sidebar" });

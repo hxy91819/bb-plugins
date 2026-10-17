@@ -13,7 +13,7 @@ import { experimental_createHostEntryHarness } from "@get-bb/plugin-sdk/testing/
 import acpHostEntry from "./src/host.js";
 import { acpHostContract } from "./src/contract.js";
 
-const PLUGIN_ID = "provider-acp";
+const PLUGIN_ID = "acp-extensions";
 
 const DECLARED_ICON_NAMES = Object.keys(
   z
@@ -124,7 +124,7 @@ describe("the ACP plugin's registrations", () => {
         id: "cursor-sdk",
         displayName: "Cursor (SDK)",
         command: "node",
-        icon: "provider-acp/cursor",
+        icon: "acp-extensions/cursor",
         iconTint: { light: "#111827", dark: "#F5F5F5" },
       }),
     });
@@ -132,7 +132,7 @@ describe("the ACP plugin's registrations", () => {
     const declaration = host.harness.registrations.providerRegistrations.find(
       (provider) => provider.id === "acp-cursor-sdk",
     );
-    expect(declaration?.icon).toBe("provider-acp/cursor");
+    expect(declaration?.icon).toBe("acp-extensions/cursor");
     expect(declaration?.strings?.iconTint).toEqual({
       light: "#111827",
       dark: "#F5F5F5",

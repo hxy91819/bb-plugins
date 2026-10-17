@@ -60,7 +60,7 @@ environment. A custom OpenCode wrapper must declare
 Missing credentials, rejected keys, and collection errors remain unavailable
 states rather than zero usage. Never print API keys when diagnosing setup.
 
-Custom ACP agents are configured with `bb plugin config provider-acp set
+Custom ACP agents are configured with `bb plugin config acp-extensions set
 customAgents '[...]'`. Preserve other entries when updating the list. Omit
 `fork` to discover the agent's capabilities on connected hosts: `session/fork`
 enables tip forks, and its `cursor-acp/checkpoint` metadata enables historical

@@ -192,12 +192,12 @@ describe("a configured entry that replaces a shipped agent", () => {
         id: "opencode",
         displayName: "My opencode",
         command: "/opt/opencode",
-        icon: "provider-acp/cursor",
+        icon: "acp-extensions/cursor",
         iconTint: { light: "#111827", dark: "#F5F5F5" },
       }),
     );
 
-    expect(agent.icon).toBe("provider-acp/cursor");
+    expect(agent.icon).toBe("acp-extensions/cursor");
     expect(agent.icon).not.toBe(shipped("acp-opencode").icon);
     expect(agent.iconTint).toEqual({ light: "#111827", dark: "#F5F5F5" });
     expect(acpProviderDeclaration(agent).strings?.iconTint).toEqual(

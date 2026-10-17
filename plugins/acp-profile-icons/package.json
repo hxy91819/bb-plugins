@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-acp-profile-icons",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "type": "module",
   "private": true,
   "description": "Brand icons for ACP providers in BB.",
@@ -8,11 +8,12 @@
   "author": "hxy91819",
   "repository": {
     "type": "git",
-    "url": "https://github.com/hxy91819/bb-plugin-acp-profile-icons.git"
+    "url": "git+https://github.com/hxy91819/bb-plugins.git",
+    "directory": "plugins/acp-profile-icons"
   },
-  "homepage": "https://github.com/hxy91819/bb-plugin-acp-profile-icons",
+  "homepage": "https://github.com/hxy91819/bb-plugins/tree/main/plugins/acp-profile-icons",
   "bugs": {
-    "url": "https://github.com/hxy91819/bb-plugin-acp-profile-icons/issues"
+    "url": "https://github.com/hxy91819/bb-plugins/issues"
   },
   "engines": {
     "bb": ">=0.44",
@@ -34,7 +35,7 @@
   },
   "dependencies": {},
   "devDependencies": {
-    "@get-bb/plugin-sdk": "0.5.29",
+    "@get-bb/plugin-sdk": "https://github.com/hxy91819/bb/releases/download/fork-v0.46.0-20261016.6/bb-plugin-sdk-fork-v0.46.0-20261016.6.tgz",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

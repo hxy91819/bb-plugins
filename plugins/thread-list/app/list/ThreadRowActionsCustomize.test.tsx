@@ -50,7 +50,7 @@ const REGISTRATIONS: readonly PluginThreadActionRegistrationInfo[] = [
     icon: "Archive",
   },
   {
-    key: "thread-list/move",
+    key: "thread-list-extras/move",
     pluginId: "thread-list",
     title: "Move to section",
     icon: "SectionMove",

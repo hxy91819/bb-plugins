@@ -52,12 +52,12 @@ it("publishes only its own maintenance providers without a display and only meas
                 {
                   id: "acp-custom",
                   displayName: "Custom",
-                  pluginId: "provider-acp",
+                  pluginId: "acp-extensions",
                 },
                 {
                   id: "another",
                   displayName: "Another",
-                  pluginId: "provider-acp",
+                  pluginId: "acp-extensions",
                 },
               ],
       },
@@ -132,7 +132,7 @@ it("forwards validated provider-owned identity and normalization metadata while 
       },
       providers: {
         list: async () => [
-          { id: "acp-custom", displayName: "Custom", pluginId: "provider-acp" },
+          { id: "acp-custom", displayName: "Custom", pluginId: "acp-extensions" },
         ],
       },
       system: {
@@ -208,7 +208,7 @@ it("coalesces concurrent reads and makes a forced refresh wait for a fresh colle
       },
       providers: {
         list: async () => [
-          { id: "acp-custom", displayName: "Custom", pluginId: "provider-acp" },
+          { id: "acp-custom", displayName: "Custom", pluginId: "acp-extensions" },
         ],
       },
       system: { usageLimits: collect },

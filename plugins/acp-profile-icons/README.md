@@ -1,3 +1,5 @@
+> 本插件已迁入 [hxy91819/bb-plugins](https://github.com/hxy91819/bb-plugins/tree/main/plugins/acp-profile-icons)。新装使用 `bb plugin install git:https://github.com/hxy91819/bb-plugins.git@main --plugin acp-profile-icons`；已有安装按集合仓库的迁移说明保留配置与数据。下文旧 Release 记录保留作来源证据。
+
 # BB ACP Profile Icons
 
 A **BB-specific frontend plugin** that displays recognizable icons for ACP providers.

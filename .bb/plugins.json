@@ -1,0 +1,27 @@
+{
+  "$schema": "https://getbb.app/schemas/plugins.schema.json",
+  "schemaVersion": 1,
+  "name": "bb-plugins",
+  "plugins": [
+    {
+      "name": "thread-list",
+      "source": "./plugins/thread-list"
+    },
+    {
+      "name": "acp",
+      "source": "./plugins/provider-acp"
+    },
+    {
+      "name": "team",
+      "source": "./plugins/team"
+    },
+    {
+      "name": "bookmarks",
+      "source": "./plugins/bookmarks"
+    },
+    {
+      "name": "acp-profile-icons",
+      "source": "./plugins/acp-profile-icons"
+    }
+  ]
+}

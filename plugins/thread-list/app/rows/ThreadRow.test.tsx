@@ -318,7 +318,7 @@ function hostThreadActions({
         thread.pinnedAt === null ? "Pin" : "PinOff",
       ),
       ...(thread.parentThreadId === null && !isArchived
-        ? [entry("thread-list/move", "Move to section", "SectionMove")]
+        ? [entry("thread-list-extras/move", "Move to section", "SectionMove")]
         : []),
       entry("bb--core/rename", "Rename", "Edit", async () => {
         requestRename(thread.id);
@@ -493,7 +493,7 @@ describe("ThreadRow", () => {
 
   it("skips row action keys that have no action for the thread", () => {
     getDefaultStore().set(preferenceValueAtom("rowActions"), [
-      "thread-list/move",
+      "thread-list-extras/move",
       "plugin-gone/action",
       "bb--core/archive",
     ]);

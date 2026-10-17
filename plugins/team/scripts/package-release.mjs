@@ -70,7 +70,7 @@ try {
       "archive",
       "--format=tar",
       `--output=${sourceTar}`,
-      "HEAD",
+      `HEAD:${git("rev-parse", "--show-prefix").replace(/\/$/, "")}`,
       "package.json",
       "package-lock.json",
       "server.ts",

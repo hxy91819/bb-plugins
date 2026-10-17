@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-bookmarks",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "build": "bb plugin build",
@@ -8,7 +8,7 @@
     "test": "tsx --test *.test.ts"
   },
   "dependencies": {
-    "@get-bb/plugin-sdk": "0.6.37",
+    "@get-bb/plugin-sdk": "https://github.com/hxy91819/bb/releases/download/fork-v0.46.0-20261016.6/bb-plugin-sdk-fork-v0.46.0-20261016.6.tgz",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -42,5 +42,10 @@
     },
     "server": "./server.ts",
     "app": "./app.tsx"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hxy91819/bb-plugins.git",
+    "directory": "plugins/bookmarks"
   }
 }
