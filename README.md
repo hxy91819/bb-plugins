@@ -35,6 +35,8 @@ BB_PLUGINS_RUNTIME_DIR=/path/to/bb-fork-v0.46.0-20261016.6 npm run build
 
 重型检查遵循运行宿主的资源隔离约定。各插件的 SDK 固定为配套 BB Release 的公开 tarball URL，各 lockfile 记录实际 integrity；团队插件保留原有 .3 供应记录，集合联合构建使用 .6 兼容性基线。构建使用匹配 BB runtime 的 CLI；不把生成的 dist、凭据、诊断日志或本机存储提交到仓库。
 
+验收记录：[五包检查及迁移回退](https://github.com/hxy91819/bb-plugins/actions/runs/39007931964)、[迁出后核心的源码 UI 与公开 Git 集合冷安装](https://github.com/hxy91819/bb-plugins/actions/runs/39009007741)。源码 UI 使用独立实例和合成线程，覆盖侧栏导航、标签与日期分组、普通 `/side` 消息及移动端长按 Queue 的实际队列结果。
+
 ## 维护
 
 集合清单以 [.bb/plugins.json](.bb/plugins.json) 为准。插件的用途、命令与操作限制留在各自目录；新增或升级插件时分别运行它的检查，再运行受影响的联合流程。既有插件保持 `team`、`bookmarks`、`acp-profile-icons` 的 ID 和追加式迁移，保证存储身份连续。
