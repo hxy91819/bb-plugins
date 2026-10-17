@@ -25,7 +25,10 @@ jobs:
       - if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm test
       - if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        id: build
         run: npm run build
+      - if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: npm run test:migration
       - if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm run format:check
       - if: ${{ !cancelled() && steps.install.outcome == 'success' }}

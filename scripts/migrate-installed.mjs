@@ -39,7 +39,10 @@ function restoreSettings(name, values) {
     ]);
 }
 const installed = cli(["plugin", "list", "--json"]).plugins;
-const cache = join(homedir(), ".cache", "bb-plugin-migration");
+const cache = join(
+  process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"),
+  "bb-plugin-migration",
+);
 await mkdir(cache, { recursive: true, mode: 0o700 });
 const backup = await mkdtemp(join(cache, "collection-"));
 for (const name of names) {

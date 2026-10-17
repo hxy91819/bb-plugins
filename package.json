@@ -9,7 +9,8 @@
     "test": "node scripts/verify.mjs test",
     "build": "node scripts/verify.mjs build",
     "format:check": "node scripts/verify.mjs format",
-    "lint": "node scripts/verify.mjs lint"
+    "lint": "node scripts/verify.mjs lint",
+    "test:migration": "node scripts/smoke-migration.mjs"
   },
   "engines": {
     "node": ">=24"
