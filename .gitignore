@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+.runtime/
+.tmp/
+*.log
+*.tsbuildinfo
+.env*
+*.pem
+*.key
+*.crt

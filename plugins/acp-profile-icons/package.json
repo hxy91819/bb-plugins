@@ -1,0 +1,43 @@
+{
+  "name": "bb-plugin-acp-profile-icons",
+  "version": "0.1.4",
+  "type": "module",
+  "private": true,
+  "description": "Brand icons for ACP providers in BB.",
+  "license": "MIT",
+  "author": "hxy91819",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hxy91819/bb-plugin-acp-profile-icons.git"
+  },
+  "homepage": "https://github.com/hxy91819/bb-plugin-acp-profile-icons",
+  "bugs": {
+    "url": "https://github.com/hxy91819/bb-plugin-acp-profile-icons/issues"
+  },
+  "engines": {
+    "bb": ">=0.44",
+    "bbPluginSdk": ">=0.5.29"
+  },
+  "bb": {
+    "name": "ACP Profile Icons",
+    "description": "Brand icons for ACP providers in BB model pickers and provider controls.",
+    "branding": {
+      "icon": "Palette"
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx",
+    "skills": []
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "bb plugin build ."
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.5.29",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.7.0"
+  }
+}

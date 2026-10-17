@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "imports": [
+    {
+      "plugin": "team",
+      "repository": "git@github.com:hxy91819/bb-team.git",
+      "source": "214c5f6e852ecd2d02e55e7e74c4ad3f4283abdd"
+    },
+    {
+      "plugin": "bookmarks",
+      "repository": "git@github.com:hxy91819/bb-plugin-bookmarks.git",
+      "source": "9f7b9d1ed61119416ee273f30aef6f0eed141306"
+    },
+    {
+      "plugin": "acp-profile-icons",
+      "repository": "git@github.com:hxy91819/bb-plugin-acp-profile-icons.git",
+      "source": "8c8ce334fbd4c937b36b54c57a07814da0402558"
+    }
+  ],
+  "bbSource": "47d099969891cab18398dc4064e836040159e6a3"
+}

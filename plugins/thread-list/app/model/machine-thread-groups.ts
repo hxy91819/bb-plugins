@@ -1,0 +1,58 @@
+import type { SidebarThread } from "./sidebar-thread.js";
+import { projectRootThreadGroups } from "./project-thread-groups.js";
+
+interface MachineHost {
+  id: string;
+  name: string;
+}
+
+export const NO_MACHINE_GROUP_KEY = "no-machine";
+
+interface MachineThreadGroup {
+  key: string;
+  label: string;
+  threads: SidebarThread[];
+}
+
+export function buildMachineThreadGroups(
+  threads: readonly SidebarThread[],
+  hosts: readonly MachineHost[],
+): MachineThreadGroup[] {
+  const threadsByKey = new Map(
+    projectRootThreadGroups(threads, (thread) => ({
+      key: thread.host?.id ?? NO_MACHINE_GROUP_KEY,
+      label: thread.host?.name ?? "No machine",
+    })).map((group) => [group.key, group.threads]),
+  );
+
+  const groups: MachineThreadGroup[] = [];
+  for (const host of hosts) {
+    const hostThreads = threadsByKey.get(host.id) ?? [];
+    threadsByKey.delete(host.id);
+    groups.push({ key: host.id, label: host.name, threads: hostThreads });
+  }
+
+  const noMachineThreads = threadsByKey.get(NO_MACHINE_GROUP_KEY);
+  threadsByKey.delete(NO_MACHINE_GROUP_KEY);
+
+  const unknownHostIds = Array.from(threadsByKey.keys()).sort((left, right) =>
+    left.localeCompare(right),
+  );
+  for (const hostId of unknownHostIds) {
+    groups.push({
+      key: hostId,
+      label: "Unknown machine",
+      threads: threadsByKey.get(hostId) ?? [],
+    });
+  }
+
+  if (noMachineThreads) {
+    groups.push({
+      key: NO_MACHINE_GROUP_KEY,
+      label: "No machine",
+      threads: noMachineThreads,
+    });
+  }
+
+  return groups;
+}

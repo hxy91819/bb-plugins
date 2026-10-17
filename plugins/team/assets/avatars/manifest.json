@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "avatars": [
+    {
+      "id": "cat",
+      "name": "小猫",
+      "file": "cat.png",
+      "alt": "小猫头像"
+    },
+    {
+      "id": "fox",
+      "name": "狐狸",
+      "file": "fox.png",
+      "alt": "狐狸头像"
+    },
+    {
+      "id": "owl",
+      "name": "猫头鹰",
+      "file": "owl.png",
+      "alt": "猫头鹰头像"
+    },
+    {
+      "id": "panda",
+      "name": "熊猫",
+      "file": "panda.png",
+      "alt": "熊猫头像"
+    },
+    {
+      "id": "koala",
+      "name": "考拉",
+      "file": "koala.png",
+      "alt": "考拉头像"
+    },
+    {
+      "id": "frog",
+      "name": "青蛙",
+      "file": "frog.png",
+      "alt": "青蛙头像"
+    },
+    {
+      "id": "dog",
+      "name": "小狗",
+      "file": "dog.png",
+      "alt": "小狗头像"
+    },
+    {
+      "id": "rabbit",
+      "name": "兔子",
+      "file": "rabbit.png",
+      "alt": "兔子头像"
+    },
+    {
+      "id": "tiger",
+      "name": "老虎",
+      "file": "tiger.png",
+      "alt": "老虎头像"
+    },
+    {
+      "id": "lion",
+      "name": "狮子",
+      "file": "lion.png",
+      "alt": "狮子头像"
+    },
+    {
+      "id": "bear",
+      "name": "小熊",
+      "file": "bear.png",
+      "alt": "小熊头像"
+    },
+    {
+      "id": "raccoon",
+      "name": "浣熊",
+      "file": "raccoon.png",
+      "alt": "浣熊头像"
+    },
+    {
+      "id": "penguin",
+      "name": "企鹅",
+      "file": "penguin.png",
+      "alt": "企鹅头像"
+    },
+    {
+      "id": "otter",
+      "name": "水獭",
+      "file": "otter.png",
+      "alt": "水獭头像"
+    },
+    {
+      "id": "red-panda",
+      "name": "小熊猫",
+      "file": "red-panda.png",
+      "alt": "小熊猫头像"
+    },
+    {
+      "id": "elephant",
+      "name": "小象",
+      "file": "elephant.png",
+      "alt": "小象头像"
+    },
+    {
+      "id": "hedgehog",
+      "name": "刺猬",
+      "file": "hedgehog.png",
+      "alt": "刺猬头像"
+    },
+    {
+      "id": "hamster",
+      "name": "仓鼠",
+      "file": "hamster.png",
+      "alt": "仓鼠头像"
+    },
+    {
+      "id": "turtle",
+      "name": "乌龟",
+      "file": "turtle.png",
+      "alt": "乌龟头像"
+    },
+    {
+      "id": "axolotl",
+      "name": "美西螈",
+      "file": "axolotl.png",
+      "alt": "美西螈头像"
+    },
+    {
+      "id": "admin",
+      "name": "管理员",
+      "file": "admin.png",
+      "alt": "管理员固定头像"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "status": "verified",
+  "tag": "fork-v0.46.0-20261014.3",
+  "source": "9ddb184943a3ce7e5820fb1d141c782c958af521",
+  "baseUrl": "https://github.com/hxy91819/bb/releases/download/fork-v0.46.0-20261014.3",
+  "runtime": {
+    "filename": "bb-fork-v0.46.0-20261014.3-linux-x64.tar.gz",
+    "sha256": "09dc3e7e7cc0f3e108f8cf1d5e798ebb36718d2bd9750ae93f97244802c14c84"
+  },
+  "sdk": {
+    "filename": "bb-plugin-sdk-fork-v0.46.0-20261014.3.tgz",
+    "sha256": "ac2913eb9f06b2b03d56a335400da4bd0ec4eee3b32b48f5bc74a331d051fcac",
+    "integrity": "sha512-IBhlOdIyY7m1bpXq4/m/Cx+0G5BCGOkI5Ve1R3F9iAYWxVcx3KGa+vIykI17FUeyIagF6gtz32qYtuXfgB+K0Q=="
+  }
+}
