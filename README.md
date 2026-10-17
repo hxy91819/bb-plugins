@@ -2,13 +2,13 @@
 
 BB 插件集合：团队身份、会话书签、ACP 图标，以及从个人 BB fork 迁出的侧栏和 ACP 定制。每个插件有独立的安装目录、插件 ID、配置与存储；共享一个源码仓库和验证入口。
 
-| 安装名 | 插件 ID | 用途 |
-| --- | --- | --- |
-| `team` | `team` | 团队身份、线程归属与有界活动查询 |
-| `bookmarks` | `bookmarks` | 会话文字书签与原消息定位 |
-| `acp-profile-icons` | `acp-profile-icons` | ACP provider 的本地图标 |
-| `thread-list` | `thread-list-extras` | 日期分组、项目标签、父线程操作偏好及完整侧栏 |
-| `acp` | `acp-extensions` | 自定义 ACP agent、能力探测、历史 fork 与 DSH 注册 |
+| 安装名              | 插件 ID              | 用途                                              |
+| ------------------- | -------------------- | ------------------------------------------------- |
+| `team`              | `team`               | 团队身份、线程归属与有界活动查询                  |
+| `bookmarks`         | `bookmarks`          | 会话文字书签与原消息定位                          |
+| `acp-profile-icons` | `acp-profile-icons`  | ACP provider 的本地图标                           |
+| `thread-list`       | `thread-list-extras` | 日期分组、项目标签、父线程操作偏好及完整侧栏      |
+| `acp`               | `acp-extensions`     | 自定义 ACP agent、能力探测、历史 fork 与 DSH 注册 |
 
 ## 安装
 
