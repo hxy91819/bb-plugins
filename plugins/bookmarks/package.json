@@ -26,14 +26,15 @@
     "react-dom": "^19.3.1",
     "sonner": "^1.7.4",
     "tsx": "^4.20.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "@testing-library/dom": "^10.4.1"
   },
   "engines": {
     "bbPluginSdk": ">=0.6.37 <0.7.0"
   },
   "bb": {
-    "name": "Bookmarks / 书签",
-    "description": "Save conversation text, browse by project, and jump back to the source message. / 收藏会话文字并跳回原消息。",
+    "name": "Bookmarks / \u4e66\u7b7e",
+    "description": "Save conversation text, browse by project, and jump back to the source message. / \u6536\u85cf\u4f1a\u8bdd\u6587\u5b57\u5e76\u8df3\u56de\u539f\u6d88\u606f\u3002",
     "branding": {
       "icon": "./assets/bookmark.svg",
       "experimental_icons": {

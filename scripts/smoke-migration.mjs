@@ -199,24 +199,17 @@ try {
     (await cli(["plugin", "config", "bookmarks"])).values.language,
     "zh-CN",
   );
-  await cli([
-    "plugin",
-    "install",
-    `path:${join(root, "plugins/thread-list")}`,
-    "--yes",
-  ]);
-  await cli(["thread-list-extras", "prefs", "set", "dateGrouping", "false"]);
+  await cli(["thread-list", "prefs", "set", "dateGrouping", "false"]);
+  await run(node, [join(root, "scripts/migrate-native.mjs"), "thread-list"]);
   assert.equal(
     (await cli(["thread-list-extras", "prefs", "get", "dateGrouping"])).value,
     false,
   );
-  await cli(["plugin", "disable", "provider-acp"]);
-  await cli([
-    "plugin",
-    "install",
-    `path:${join(root, "plugins/provider-acp")}`,
-    "--yes",
-  ]);
+  assert.equal(
+    (await cli(["settings", "ui", "get", "sidebar.threadListProvider"])).value,
+    "thread-list-extras/thread-list",
+  );
+  await run(node, [join(root, "scripts/migrate-native.mjs"), "acp"]);
   assert.equal(
     (await cli(["plugin", "list"])).plugins.find(
       (plugin) => plugin.id === "acp-extensions",

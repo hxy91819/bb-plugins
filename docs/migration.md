@@ -23,7 +23,16 @@ node scripts/migrate-installed.mjs team bookmarks acp-profile-icons
 | thread-list | thread-list-extras | thread-list | 复制 `bb thread-list prefs list --json` 中的偏好，Move 操作 key 改用 thread-list-extras/move，再选择新列表 |
 | acp | acp-extensions | provider-acp | 复制 customAgents 配置，保留 acp-* provider ID；停用原内置提供者后由新插件注册 |
 
-这两项需要在隔离实例中验证后切换。保留原内置插件的数据，避免通过卸载来清除配置。启用新提供者后不要同时启用两份相同职责的提供者。
+构建后使用专用迁移入口：
+
+```sh
+node scripts/migrate-native.mjs thread-list
+node scripts/migrate-native.mjs acp
+```
+
+脚本保存私有配置回执，复制偏好并核对读回值，切换列表选择、停用旧提供者，失败时恢复旧提供者和选择。ACP 迁移要求所有 ACP 会话已空闲或报错；保留相同 acp-* provider ID、自定义 agent 配置和原内置插件的数据。已有新插件安装时先手动协调其配置，脚本不会覆盖它。
+
+`BB_PLUGINS_RUNTIME_DIR=/path/to/runtime npm run test:migration` 在全新合成实例中验证上述五插件的安装与迁移；不会读取用户库。
 
 ## 配套核心
 

@@ -10,17 +10,21 @@ const collection = JSON.parse(
 const requested = process.argv[2];
 const tasks = requested ? [requested] : ["typecheck", "test", "build"];
 const runtime = process.env.BB_PLUGINS_RUNTIME_DIR;
+const supply = JSON.parse(
+  await readFile(join(root, "bb-runtime.json"), "utf8"),
+);
 const env = { ...process.env };
 if (runtime) {
   const release = JSON.parse(
     await readFile(join(runtime, "release.json"), "utf8"),
   );
-  if (release.source !== "47d099969891cab18398dc4064e836040159e6a3")
-    throw new Error("Use the documented BB fork-v0.46.0-20261016.6 runtime.");
+  if (release.source !== supply.source || release.tag !== supply.tag)
+    throw new Error(`Use the documented BB ${supply.tag} runtime.`);
   env.PATH = `${join(runtime, "bin")}:${env.PATH ?? ""}`;
   delete env.BB_CLI;
   delete env.BB_CLI_REEXEC;
 }
+const failures = [];
 for (const plugin of collection.plugins) {
   const cwd = join(root, plugin.source);
   const manifest = JSON.parse(
@@ -50,6 +54,12 @@ for (const plugin of collection.plugins) {
       stdio: "inherit",
     });
     if (result.error) throw result.error;
-    if (result.status !== 0) process.exit(result.status ?? 1);
+    if (result.status !== 0)
+      failures.push(`${plugin.name}: ${task} exited ${result.status ?? 1}`);
   }
+}
+
+if (failures.length) {
+  console.error(failures.join("\n"));
+  process.exitCode = 1;
 }
