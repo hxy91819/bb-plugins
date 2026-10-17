@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createWriteStream } from "node:fs";
-import { cp, mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  symlink,
+} from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -176,6 +184,28 @@ try {
     text: "Migration must retain this saved text",
   });
   assert.equal(saved.ok, true);
+  const sourceBefore = await cli(["plugin", "source", "bookmarks"]);
+  const manifestPath = join(root, "plugins/bookmarks/package.json");
+  await rename(manifestPath, `${manifestPath}.smoke-disabled`);
+  try {
+    await assert.rejects(
+      run(node, [join(root, "scripts/migrate-installed.mjs"), "bookmarks"]),
+    );
+  } finally {
+    await rename(`${manifestPath}.smoke-disabled`, manifestPath);
+  }
+  assert.equal(
+    (await cli(["plugin", "source", "bookmarks"])).requested,
+    sourceBefore.requested,
+  );
+  assert.equal(
+    (await cli(["bookmarks", "list"])).bookmarks[0].id,
+    saved.result.id,
+  );
+  assert.equal(
+    (await cli(["plugin", "config", "bookmarks"])).values.language,
+    "zh-CN",
+  );
   await run(node, [
     join(root, "scripts/migrate-installed.mjs"),
     "team",
