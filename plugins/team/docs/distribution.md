@@ -1,4 +1,6 @@
-# Installation and release artifacts
+# Historical v0.2.0 release artifacts
+
+For new installations and existing-source migration, use the [collection installation guide](../../../README.md) and [data-preserving migration](../../../docs/migration.md). The fixed v0.2.0 artifacts below remain available in the archived original repository.
 
 ## Supply status
 

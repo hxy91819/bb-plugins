@@ -1,4 +1,4 @@
-> 本插件已迁入 [hxy91819/bb-plugins](https://github.com/hxy91819/bb-plugins/tree/main/plugins/acp-profile-icons)。新装使用 `bb plugin install git:https://github.com/hxy91819/bb-plugins.git@main --plugin acp-profile-icons`；已有安装按集合仓库的迁移说明保留配置与数据。下文旧 Release 记录保留作来源证据。
+> 本插件已迁入 [hxy91819/bb-plugins](https://github.com/hxy91819/bb-plugins/tree/main/plugins/acp-profile-icons)。新装使用 `bb plugin install git:https://github.com/hxy91819/bb-plugins.git@main --plugin acp-profile-icons`；已有安装按集合仓库的迁移说明保留配置与数据。原仓库保留历史，新功能与修复在本集合维护。
 
 # BB ACP Profile Icons
 
@@ -19,10 +19,10 @@ Amp and Devin use BB’s theme foreground for their tiles and theme background f
 
 ## Install
 
-Requires BB 0.44 or newer and Plugin SDK 0.5.29 or newer. Install into the BB instance serving the UI:
+This collection is verified against BB fork `fork-v0.46.0-20261016.6` and its pinned Plugin SDK `0.6.37`. Install into the BB instance serving the UI:
 
 ```sh
-bb plugin install https://github.com/hxy91819/bb-plugin-acp-profile-icons --yes
+bb plugin install git:https://github.com/hxy91819/bb-plugins.git@main --plugin acp-profile-icons --yes
 ```
 
 Plugin ID: **`acp-profile-icons`**. The install builds the plugin from source. No credentials, external image requests, or configuration are needed.
@@ -114,8 +114,8 @@ Compilation and DOM checks support verification; a screenshot that has not been 
 ## Develop
 
 ```sh
-git clone https://github.com/hxy91819/bb-plugin-acp-profile-icons.git
-cd bb-plugin-acp-profile-icons
+git clone https://github.com/hxy91819/bb-plugins.git
+cd bb-plugins/plugins/acp-profile-icons
 npm ci
 npm run typecheck
 bb plugin build .
