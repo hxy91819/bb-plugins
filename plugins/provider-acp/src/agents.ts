@@ -30,6 +30,8 @@ export interface AcpAgentDefinition {
   fork?: "none" | "tip" | "checkpoint";
   reasoningLevels?: readonly PluginProviderReasoningLevel[];
   providerUsage?: boolean;
+  permissionModes?: readonly ("accept-edits" | "auto" | "full")[];
+  supportsServiceTier?: boolean;
   providerInstallation?: boolean;
   nativeRootsResolver?: AcpNativeRootsResolver;
 }
@@ -65,6 +67,26 @@ export const customAcpAgentSchema = z
     fork: z.enum(["none", "tip", "checkpoint"]).optional(),
     supportsManualCompaction: z.boolean().default(false),
     providerUsage: z.boolean().optional(),
+    permissionModes: z
+      .array(z.enum(["accept-edits", "auto", "full"]))
+      .min(1)
+      .optional(),
+    reasoningLevels: z
+      .array(
+        z.enum([
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra",
+          "ultracode",
+        ]),
+      )
+      .min(1)
+      .optional(),
+    supportsServiceTier: z.boolean().optional(),
   })
   .strict();
 export type CustomAcpAgent = z.infer<typeof customAcpAgentSchema>;
@@ -101,6 +123,15 @@ export function customAcpAgentDefinition(
         : { permissionCli: agent.permissionCli }),
     },
     ...(agent.providerUsage ? { providerUsage: true } : {}),
+    ...(agent.permissionModes === undefined
+      ? {}
+      : { permissionModes: agent.permissionModes }),
+    ...(agent.reasoningLevels === undefined
+      ? {}
+      : { reasoningLevels: agent.reasoningLevels }),
+    ...(agent.supportsServiceTier === undefined
+      ? {}
+      : { supportsServiceTier: agent.supportsServiceTier }),
     ...(agent.dialect === undefined ? {} : { dialect: agent.dialect }),
     ...(agent.steeringMode === undefined
       ? {}

@@ -48,7 +48,10 @@ export function acpProviderDeclaration(
     family: ACP_FAMILY,
     ...(agent.icon === undefined ? {} : { icon: agent.icon }),
     strings: acpStrings(agent),
-    serviceTiers: [...ACP_SERVICE_TIERS],
+    serviceTiers:
+      agent.supportsServiceTier === false
+        ? [ACP_SERVICE_TIERS[0]]
+        : [...ACP_SERVICE_TIERS],
     ...(agent.visibility === undefined
       ? {}
       : { experimental_visibility: agent.visibility }),
@@ -92,7 +95,12 @@ export function acpProviderDeclaration(
     capabilities: {
       ...ACP_BASE_CAPABILITIES,
       fork: agent.fork ?? DEFAULT_FORK,
-      permissionModes: [...ACP_BASE_CAPABILITIES.permissionModes],
+      permissionModes: [
+        ...(agent.permissionModes ?? ACP_BASE_CAPABILITIES.permissionModes),
+      ],
+      ...(agent.supportsServiceTier === undefined
+        ? {}
+        : { supportsServiceTier: agent.supportsServiceTier }),
       ...(agent.supportsManualCompaction === true
         ? { supportsManualCompaction: true }
         : {}),

@@ -20,16 +20,12 @@ available after successful discovery. Optional `"fork": "none"` disables forks;
 `"fork": "tip"` limits forks to the conversation tip; `"fork": "checkpoint"`
 declares historical support, checked by the probe and bridge. Select a saved
 successful turn with `bb thread fork <id> --source-seq-end <seq>`. Checkpoints
-preserve conversation state rather than files. See the Custom ACP Agents chapter in
-`docs/configuration.md` for configuration and refresh behavior.
+preserve conversation state rather than files. See [Custom ACP configuration](#custom-acp-configuration) below for the configuration entrypoint.
 
-The plugin has no bridge of its own. Every agent it registers runs on the
-published ACP kit, `@get-bb/plugin-sdk/provider-bridge/acp`, which its
-`bb.host` entry re-exports (`src/host.ts`). That is the whole
-point of the kit: a third-party plugin adds an ACP agent exactly the way this
-one does, with no bb-side code. The plugin is forkable
-(`docs/forkable-plugins.md`): its lint rule and the fork check prove it takes
-no shortcut — no file here may import a workspace package.
+Every agent it registers executes on the published ACP kit,
+`@get-bb/plugin-sdk/provider-bridge/acp`. The host delegates all ACP execution
+to that kit and adds only a read-only AGY usage maintenance handler.
+The plugin uses only the public SDK; no file here imports a BB workspace package.
 
 What lives here:
 
@@ -41,8 +37,7 @@ What lives here:
   what the bridge parses. The setting itself is a multi-line JSON field
   (`experimental_multiline`) whose description stays at two sentences; the
   field reference — required and optional fields, the replacement rule for a
-  shipped agent's id, the `acp-<id>` provider id — is the "Custom ACP Agents"
-  chapter of `docs/configuration.md`.
+  shipped agent's id, the `acp-<id>` provider id — is [Custom ACP configuration](#custom-acp-configuration) below.
 - `src/configured-agents.ts` — resolving the setting's JSON into agent
   definitions, with a warning for each entry it cannot use.
 - `src/declaration.ts` — one agent definition becomes one
@@ -50,7 +45,7 @@ What lives here:
   capabilities, and the bridge options it launches with (`acpLaunchSpec`, and
   `acpDialect` for the agents whose vendor side channels the kit reads).
 - `src/host.ts` — the `bb.host` artifact, two surfaces in one file: the kit's
-  bridge, re-exported, and a host entry whose one RPC asks an agent what it
+  bridge, with the AGY maintenance wrapper, and a host entry whose one RPC asks an agent what it
   supports on the machine it is installed on (`src/contract.ts`,
   `src/probe-capabilities.ts`).
 - `icons/` — the provider logos, declared in `package.json` under
@@ -58,3 +53,29 @@ What lives here:
 
 The kit itself, including the ACP wire schema, the delta translation, the
 per-agent dialects and the bridge process, is `packages/provider-bridge-acp`.
+
+## Custom ACP configuration
+
+The BB-managed `customAgents` setting is the single configuration entrypoint:
+`bb plugin config acp-extensions set customAgents '<JSON array>'`.
+Preserve other entries when changing it. Each entry declares `id`, `displayName`,
+`command`, optional `args`, `env`, `nativeSkillRoots`, `permissionCli`, `dialect`,
+and `fork`. The provider ID remains `acp-<id>`.
+
+Optional `permissionModes`, `reasoningLevels`, and `supportsServiceTier` keep the
+provider's advertised controls aligned with its actual adapter. Defaults remain
+Accept Edits/Full, the usual reasoning ladder, and Default/Fast tiers. A full-only
+agent should explicitly declare `permissionModes: ["full"]` rather than advertise
+an unenforced restriction.
+
+AGY can use `dialect: "agy"` and `providerUsage: true`. Its ACP traffic still uses
+the SDK's generic dialect. Its maintenance handler runs `AGY_BIN` from the launch
+`env` (default `agy`) with `--print /usage`, on the selected machine, with bounded
+output, timeout and shutdown cleanup. No machine path, account or executable-agent
+registration is embedded in the quota dashboard. If a compatibility adapter is
+needed (for example CodeBuddy's cancellation proxy), configure it as the launch
+command; keep its executable separate from display plugins.
+
+Native Codex/Claude/Pi providers, Account Pooler credentials/routing, and dashboard
+preferences retain their respective BB configuration owners. This ACP setting
+never modifies account-pool routing or selects a model-routing policy.

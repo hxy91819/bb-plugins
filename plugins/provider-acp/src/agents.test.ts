@@ -482,3 +482,79 @@ describe("acpProviderDeclaration", () => {
     expect(declaration.maintenance?.usage).toBe(false);
   });
 });
+
+describe("custom agent capability configuration", () => {
+  it("preserves existing controls when optional capability fields are omitted", () => {
+    const parsed = parseCustomAcpAgents({
+      entries: [
+        {
+          id: "default-agent",
+          displayName: "Default agent",
+          command: "adapter",
+        },
+      ],
+      reservedProviderIds: new Set(),
+    });
+    expect(parsed.problems).toEqual([]);
+    const declaration = acpProviderDeclaration(
+      customAcpAgentDefinition(parsed.agents[0]!),
+    );
+    expect(declaration.capabilities.permissionModes).toEqual([
+      "accept-edits",
+      "full",
+    ]);
+    expect(declaration.capabilities.reasoningLevels).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    expect(declaration.capabilities.supportsServiceTier).toBe(true);
+    expect(declaration.serviceTiers).toEqual([
+      { id: "default", label: "Default" },
+      { id: "fast", label: "Fast" },
+    ]);
+  });
+
+  it("keeps full-only agents and their supported reasoning/service tiers accurate", () => {
+    const parsed = parseCustomAcpAgents({
+      entries: [
+        {
+          id: "configured-agent",
+          displayName: "Configured agent",
+          command: "adapter",
+          permissionModes: ["full"],
+          reasoningLevels: ["medium"],
+          supportsServiceTier: false,
+        },
+      ],
+      reservedProviderIds: new Set(),
+    });
+    expect(parsed.problems).toEqual([]);
+    const declaration = acpProviderDeclaration(
+      customAcpAgentDefinition(parsed.agents[0]!),
+    );
+    expect(declaration.capabilities.permissionModes).toEqual(["full"]);
+    expect(declaration.capabilities.reasoningLevels).toEqual(["medium"]);
+    expect(declaration.capabilities.supportsServiceTier).toBe(false);
+    expect(declaration.serviceTiers).toEqual([
+      { id: "default", label: "Default" },
+    ]);
+  });
+  it.each([
+    { permissionModes: [] },
+    { permissionModes: ["unsupported"] },
+    { reasoningLevels: [] },
+    { reasoningLevels: ["turbo"] },
+  ])("rejects unsupported or empty capability lists: %j", (extra) => {
+    const parsed = parseCustomAcpAgents({
+      entries: [
+        { id: "agent", displayName: "Agent", command: "adapter", ...extra },
+      ],
+      reservedProviderIds: new Set(),
+    });
+    expect(parsed.agents).toEqual([]);
+    expect(parsed.problems).toHaveLength(1);
+  });
+});
