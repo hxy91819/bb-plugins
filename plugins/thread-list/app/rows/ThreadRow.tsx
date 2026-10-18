@@ -717,7 +717,7 @@ function ThreadRowComponent({
       <span
         className={cn(
           "relative flex min-w-0 flex-1 items-center self-stretch",
-          projectName && !isCompactViewport ? "gap-0" : "gap-1.5",
+          projectName ? "gap-0" : "gap-1.5",
           !isActionsOpen &&
             "group-data-[sidebar-touch-armed=true]/thread-row:hidden",
           !shortcut &&
@@ -823,34 +823,13 @@ function ThreadRowComponent({
           </Tooltip>
         ) : null}
         {projectName ? (
-          isCompactViewport ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span
-                  data-sidebar-thread-project-name=""
-                  role="img"
-                  aria-label={projectName}
-                  className="relative z-[31] flex size-5 shrink-0 items-center justify-center text-muted-foreground"
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    rowLinkRef.current?.click();
-                  }}
-                >
-                  <Icon name="Folder" className="size-3.5" aria-hidden />
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="top">{projectName}</TooltipContent>
-            </Tooltip>
-          ) : (
-            <span
-              data-sidebar-thread-project-name=""
-              title={`Project: ${projectName}`}
-              className="pointer-events-none min-w-5 max-w-24 shrink-[100] truncate rounded-sm bg-muted/50 px-1.5 py-0.5 text-2xs leading-none text-subtle-foreground"
-            >
-              {projectName}
-            </span>
-          )
+          <span
+            data-sidebar-thread-project-name=""
+            title={`Project: ${projectName}`}
+            className="pointer-events-none min-w-5 max-w-24 shrink-[100] truncate rounded-sm bg-muted/50 px-1.5 py-0.5 text-2xs leading-none text-subtle-foreground"
+          >
+            {projectName}
+          </span>
         ) : null}
         {parentOptions && hasChildren ? (
           <SidebarChildToggleChevron

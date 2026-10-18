@@ -1053,54 +1053,32 @@ describe("ThreadRow", () => {
     ).toBe("Web App");
   });
 
-  it("renders the project label as an icon with accessible project name in compact viewport", () => {
-    const project = {
-      id: "proj_work",
-      name: "Web App",
-      isPersonal: false,
-      href: "/projects/proj_work",
-      settingsHref: "/projects/proj_work/settings",
-    };
-    const { container } = renderThreadRow({
-      thread: createThread({ projectId: project.id }),
-      projects: [project],
-      showProjectName: true,
-      isCompactViewport: true,
-    });
+  it.each([true, false])(
+    "renders a visible project name when compact viewport is %s",
+    (isCompactViewport) => {
+      const project = {
+        id: "proj_work",
+        name: "Web App",
+        isPersonal: false,
+        href: "/projects/proj_work",
+        settingsHref: "/projects/proj_work/settings",
+      };
+      const { container } = renderThreadRow({
+        thread: createThread({ projectId: project.id }),
+        projects: [project],
+        showProjectName: true,
+        isCompactViewport,
+      });
 
-    const projectBadge = container.querySelector(
-      "[data-sidebar-thread-project-name]",
-    );
-    expect(projectBadge).not.toBeNull();
-    expect(projectBadge?.textContent).toBe("");
-    expect(projectBadge?.getAttribute("role")).toBe("img");
-    expect(projectBadge?.getAttribute("aria-label")).toBe("Web App");
-    expect(projectBadge?.hasAttribute("title")).toBe(false);
-    expect(projectBadge?.querySelector('[data-icon="Folder"]')).not.toBeNull();
-    expect(screen.getByRole("img", { name: "Web App" })).toBe(projectBadge);
-  });
-
-  it("renders the project label as text chip in non-compact viewport", () => {
-    const project = {
-      id: "proj_work",
-      name: "Web App",
-      isPersonal: false,
-      href: "/projects/proj_work",
-      settingsHref: "/projects/proj_work/settings",
-    };
-    const { container } = renderThreadRow({
-      thread: createThread({ projectId: project.id }),
-      projects: [project],
-      showProjectName: true,
-      isCompactViewport: false,
-    });
-
-    const projectBadge = container.querySelector(
-      "[data-sidebar-thread-project-name]",
-    );
-    expect(projectBadge?.textContent).toBe("Web App");
-    expect(projectBadge?.querySelector('[data-icon="Folder"]')).toBeNull();
-  });
+      const projectBadge = container.querySelector(
+        "[data-sidebar-thread-project-name]",
+      );
+      expect(projectBadge?.textContent).toBe("Web App");
+      expect(
+        screen.getByRole("link", { name: "Open Thread in Web App" }),
+      ).toBeTruthy();
+    },
+  );
 
   it("falls back to a generic label when the other project is unknown", () => {
     const { container } = renderThreadRow({
