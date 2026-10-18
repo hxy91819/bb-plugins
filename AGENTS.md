@@ -8,6 +8,8 @@ Run checks for the changed plugin and the affected combined workflow through the
 
 Keep imported license notices and the original source evidence in `migration-origins.json`. Source and configuration live here; active BB core patches remain in the BB repository's `.fork/branches`.
 
+新增功能或改变维护边界、插件 ID、仓库位置时，同步 BB 的[功能维护与插件更新索引](https://github.com/hxy91819/bb/blob/fork-tooling/docs/feature-index.md)。普通版本变化从远端与实际安装源读取，不在索引复制版本清单。
+
 ## 交付收尾
 
 - 整项任务完成必要验证和适用的 review 后，统一提交本任务文件，推送到个人远端 `origin` 并核对远端 SHA；这是持续授权，无需再次确认。中间可保存检查点提交，发布统一放在最终交付阶段。
