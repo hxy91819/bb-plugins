@@ -99,18 +99,14 @@ test("包不依赖私有 BB API", async () => {
 });
 
 
-test("language setting validates overrides, persists on reload, and CLI errors stay English", async () => {
+test("CLI errors stay English across reload", async () => {
   let { bb, harness } = fixture();
   try {
     await plugin(bb);
-    for (const language of ["en", "zh-CN", "auto"]) {
-      await harness.behavior.setSettings({ language });
-      const missing = await harness.behavior.runCli(["show", "missing", "--json"]);
-      assert.equal(JSON.parse(missing.stderr!).error, "Bookmark not found: missing");
-      const duplicate = await harness.behavior.runCli(["list", "--limit", "1", "--limit", "2", "--json"]);
-      assert.equal(JSON.parse(duplicate.stderr!).error, "Duplicate argument: --limit");
-    }
-    await assert.rejects(harness.behavior.setSettings({ language: "fr" }));
+    const missing = await harness.behavior.runCli(["show", "missing", "--json"]);
+    assert.equal(JSON.parse(missing.stderr!).error, "Bookmark not found: missing");
+    const duplicate = await harness.behavior.runCli(["list", "--limit", "1", "--limit", "2", "--json"]);
+    assert.equal(JSON.parse(duplicate.stderr!).error, "Duplicate argument: --limit");
     ({ bb, harness } = await harness.lifecycle.reload(plugin));
     assert.equal((await harness.behavior.runCli(["show", "missing"])).stderr, "Bookmark not found: missing");
   } finally { await harness.lifecycle.dispose(); }

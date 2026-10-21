@@ -10,23 +10,11 @@ Install with `bb plugin install git:https://github.com/hxy91819/bb-plugins.git@m
 Use **Add bookmark** on a message or selected assistant reply text, then open **Bookmarks**
 in the right panel to search, copy, edit notes, or delete entries.
 
-## Language / 界面语言
+## Interface
 
-The UI supports English and Simplified Chinese. The plugin's **Language / 语言**
-setting defaults to **Auto / 自动** (`auto`): `navigator.language` starting with
-`zh` selects Simplified Chinese; all other languages select English. Choose
-**English** (`en`) or **简体中文** (`zh-CN`) to override it. Reload the browser after
-changing the setting so message menus, panel titles, content and date formatting
-all use the same language. The setting is shared by this BB instance; auto detection
-runs separately in each browser. CLI descriptions/errors and the agent skill use English.
+The interface, date formatting, CLI and agent skill use English, matching BB.
 Thread titles use BB’s explicit title or automatic fallback. Legacy missing title
-snapshots are repaired when read, so existing bookmarks and title search recover too;
-valid saved titles are preserved.
-
-界面支持英文和简体中文。插件设置中的 **Language / 语言** 默认 **Auto / 自动**：
-浏览器 `navigator.language` 以 `zh` 开头显示中文，其余显示英文。
-可选 **English** 或 **简体中文** 强制覆盖。修改后刷新浏览器，让菜单、标签、面板和日期统一切换。
-设置对当前 BB 实例生效，自动模式按各浏览器分别判断；CLI 与 agent skill 使用英文。
+snapshots are repaired when read; valid saved titles and bookmark content are preserved.
 
 ## 安装
 
@@ -40,10 +28,10 @@ bb plugin install git:https://github.com/hxy91819/bb-plugins.git@main --plugin b
 
 ## 使用
 
-- 选中 assistant 回复文字，在选区菜单点击“加书签”，保存精确选区。
-- 消息操作栏的“加书签”保存整条消息文字，支持用户消息及 assistant 回复。添加成功自动打开右侧“书签”标签页，恢复当前项目过滤、清空搜索并滚动高亮新书签。
-- 会话右侧面板常驻“书签”标签，不必从“+”添加；显示书签时不会自动展开已收起的面板或切换当前标签。需要支持 `threadPanelAction.experimental_pinned` 的 BB fork；旧版仍可从“+”打开。默认勾选“仅当前项目”，按会话分组，当前会话排在最前；取消勾选显示全部项目，按项目分组。
-- “复制文字”“改备注”“删除”提供悬停底色、手形光标和键盘焦点提示。
+- 选中 assistant 回复文字，在选区菜单点击“Add bookmark”，保存精确选区。
+- 消息操作栏的“Add bookmark”保存整条消息文字，支持用户消息及 assistant 回复。添加成功自动打开右侧“Bookmarks”标签页，恢复当前项目过滤、清空搜索并滚动高亮新书签。
+- 会话右侧面板常驻“Bookmarks”标签，不必从“+”添加；显示书签时不会自动展开已收起的面板或切换当前标签。需要支持 `threadPanelAction.experimental_pinned` 的 BB fork；旧版仍可从“+”打开。默认勾选“Current project only”，按会话分组，当前会话排在最前；取消勾选显示全部项目，按项目分组。
+- “Copy text”“Edit note”“Delete”提供悬停底色、手形光标和键盘焦点提示。
 - 可搜索文字、备注、会话标题及项目名称，复制文字、删除和编辑备注。点击文字回到原会话的原消息，同会话内直接滚动。没有侧栏底部或导航栏全页入口。
 
 定位使用 `toThread(threadId, { experimental_messageSeq })`。支持此扩展的宿主会加载并滚动到目标消息；较旧宿主忽略该选项时仍会打开会话。定位粒度是消息，不会高亮选中的句子。原会话或消息已删除时，书签文字仍保留，宿主负责显示目标不可用。

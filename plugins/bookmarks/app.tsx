@@ -11,7 +11,7 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import { bookmarkSchema, groupBookmarks, type Bookmark, type rpcContract } from "./contract";
 
-import { messages, resolveLanguage, formatDate, readLanguageSetting, type Language } from "./i18n";
+import { messages as m } from "./messages";
 const actionButtonClassName = "cursor-pointer rounded-md px-2 py-1 text-xs transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50";
 let target: { threadId: string; id: string } | null = null;
 const listeners = new Set<() => void>();
@@ -44,14 +44,11 @@ function BookmarkRow({
   bookmark,
   onChanged,
   highlighted,
-  language,
 }: {
   bookmark: Bookmark;
   onChanged(): void;
   highlighted: boolean;
-  language: Language;
 }) {
-  const m = messages[language];
   const title = bookmark.threadTitle || m.untitled;
   const navigate = useBbNavigate();
   const rpc = useRpc<typeof rpcContract>();
@@ -132,7 +129,7 @@ function BookmarkRow({
         </p>
       ) : null}
       <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-        <time dateTime={bookmark.createdAt}>{formatDate(bookmark.createdAt, language)}</time>
+        <time dateTime={bookmark.createdAt}>{new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "medium" }).format(new Date(bookmark.createdAt))}</time>
         <button
           className={actionButtonClassName}
           disabled={pending}
@@ -168,8 +165,7 @@ function BookmarkRow({
   );
 }
 
-function BookmarksPanel({ threadId, language }: PluginThreadPanelProps & { language: Language }) {
-  const m = messages[language];
+function BookmarksPanel({ threadId }: PluginThreadPanelProps) {
   const rpc = useRpc<typeof rpcContract>();
   const sdk = useSdk();
   const requestedTarget = useSyncExternalStore(subscribe, getTarget);
@@ -288,7 +284,6 @@ function BookmarksPanel({ threadId, language }: PluginThreadPanelProps & { langu
                   <BookmarkRow
                     key={bookmark.id}
                     bookmark={bookmark}
-                    language={language}
                     onChanged={refresh}
                     highlighted={bookmark.id === selectedId}
                   />
@@ -305,42 +300,34 @@ function BookmarksPanel({ threadId, language }: PluginThreadPanelProps & { langu
   );
 }
 
-export function createBookmarksApp(setting: unknown, browserLanguage = typeof navigator === "undefined" ? "" : navigator.language) {
-  const language = resolveLanguage(setting, browserLanguage);
-  const m = messages[language];
-  return definePluginApp((app) => {
-    app.slots.messageAction({
-      id: "add-bookmark",
-      title: m.add,
-      icon: "bookmarks/bookmark",
-      async run(context) {
-        try {
-          const bookmark = await addBookmark(
-            context.threadId,
-            context.message.experimental_messageSeq,
-            context.selectedText ?? context.message.text,
-          );
-          target = { threadId: context.threadId, id: bookmark.id };
-          listeners.forEach((listener) => listener());
-          context.openPanel({ actionId: "bookmarks" });
-          toast.success(m.added);
-        } catch {
-          toast.error(m.addError);
-        }
-      },
-    });
-    const panel = {
-      id: "bookmarks",
-      experimental_pinned: true,
-      title: m.panel,
-      icon: "bookmarks/bookmark",
-      layout: "flush" as const,
-      component: (props: PluginThreadPanelProps) => <BookmarksPanel {...props} language={language} />,
-    };
-    app.slots.threadPanelAction(panel);
+export default definePluginApp((app) => {
+  app.slots.messageAction({
+    id: "add-bookmark",
+    title: m.add,
+    icon: "bookmarks/bookmark",
+    async run(context) {
+      try {
+        const bookmark = await addBookmark(
+          context.threadId,
+          context.message.experimental_messageSeq,
+          context.selectedText ?? context.message.text,
+        );
+        target = { threadId: context.threadId, id: bookmark.id };
+        listeners.forEach((listener) => listener());
+        context.openPanel({ actionId: "bookmarks" });
+        toast.success(m.added);
+      } catch {
+        toast.error(m.addError);
+      }
+    },
   });
-}
-
-export default createBookmarksApp(
-  typeof window === "undefined" ? undefined : await readLanguageSetting(fetch),
-);
+  const panel = {
+    id: "bookmarks",
+    experimental_pinned: true,
+    title: m.panel,
+    icon: "bookmarks/bookmark",
+    layout: "flush" as const,
+    component: BookmarksPanel,
+  };
+  app.slots.threadPanelAction(panel);
+});

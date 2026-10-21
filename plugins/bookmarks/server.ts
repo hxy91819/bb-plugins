@@ -1,19 +1,10 @@
-import { messages } from "./i18n";
 import { randomUUID } from "node:crypto";
 import { PLUGIN_CLI_OUTPUT_MAX_BYTES, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { bookmarkSchema, listInput, rpcContract, type Bookmark } from "./contract";
 
+const legacyUntitledThreadTitle = "未命名会话";
+
 export default function plugin(bb: BbPluginApi) {
-  bb.settings.define({
-    language: {
-      type: "select",
-      label: `${messages.en.language} / ${messages["zh-CN"].language}`,
-      description: `${messages.en.languageHelp} / ${messages["zh-CN"].languageHelp}`,
-      options: ["auto", "en", "zh-CN"],
-      experimental_optionLabels: { auto: `${messages.en.auto} / ${messages["zh-CN"].auto}`, en: "English", "zh-CN": "简体中文" },
-      default: "auto",
-    },
-  });
   const db = bb.storage.database();
   bb.storage.migrate(db, [
     `CREATE TABLE bookmarks (id TEXT PRIMARY KEY, threadId TEXT NOT NULL, messageSeq INTEGER NOT NULL, projectId TEXT NOT NULL, projectName TEXT NOT NULL, threadTitle TEXT NOT NULL, text TEXT NOT NULL, note TEXT NOT NULL, createdAt TEXT NOT NULL)`,
@@ -24,7 +15,7 @@ export default function plugin(bb: BbPluginApi) {
     const row = db.prepare("SELECT * FROM bookmarks WHERE id = ?").get(id);
     if (!row) return null;
     const bookmark = bookmarkSchema.parse(row);
-    return bookmark.threadTitle === messages["zh-CN"].untitled ? { ...bookmark, threadTitle: "" } : bookmark;
+    return bookmark.threadTitle === legacyUntitledThreadTitle ? { ...bookmark, threadTitle: "" } : bookmark;
   };
   // Older versions stored the placeholder instead of the host's automatic title.
   // Repair only missing snapshots, so SQL title search and existing bookmarks agree.
@@ -34,7 +25,7 @@ export default function plugin(bb: BbPluginApi) {
       const title = thread.title || thread.titleFallback;
       if (title) db.prepare(
         "UPDATE bookmarks SET threadTitle = ? WHERE threadId = ? AND (threadTitle = '' OR threadTitle = ?)",
-      ).run(title, threadId, messages["zh-CN"].untitled);
+      ).run(title, threadId, legacyUntitledThreadTitle);
     } catch {
       // Deleted or unavailable threads must not make the saved text unreadable.
     }
@@ -42,7 +33,7 @@ export default function plugin(bb: BbPluginApi) {
   const repairMissingTitles = async () => {
     const rows = db.prepare(
       "SELECT DISTINCT threadId FROM bookmarks WHERE threadTitle = '' OR threadTitle = ?",
-    ).all(messages["zh-CN"].untitled) as { threadId: string }[];
+    ).all(legacyUntitledThreadTitle) as { threadId: string }[];
     await Promise.all(rows.map(({ threadId }) => repairTitle(threadId)));
   };
   const list = async (input: ReturnType<typeof listInput.parse>) => {
@@ -55,7 +46,7 @@ export default function plugin(bb: BbPluginApi) {
       .all(...values, input.limit, input.offset)
       .map((row) => {
         const bookmark = bookmarkSchema.parse(row);
-        return bookmark.threadTitle === messages["zh-CN"].untitled ? { ...bookmark, threadTitle: "" } : bookmark;
+        return bookmark.threadTitle === legacyUntitledThreadTitle ? { ...bookmark, threadTitle: "" } : bookmark;
       });
     const count = db.prepare(`SELECT count(*) AS total FROM bookmarks ${where}`).get(...values);
     const total = Number((count as { total: number }).total);
@@ -141,7 +132,7 @@ export default function plugin(bb: BbPluginApi) {
       }
       if ((command === "show" || command === "rm") && args.length === 1) {
         let bookmark = get(args[0]);
-        if (command === "show" && bookmark && (!bookmark.threadTitle || bookmark.threadTitle === messages["zh-CN"].untitled)) {
+        if (command === "show" && bookmark && (!bookmark.threadTitle || bookmark.threadTitle === legacyUntitledThreadTitle)) {
           await repairTitle(bookmark.threadId);
           bookmark = get(args[0]);
         }

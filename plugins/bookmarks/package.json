@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-bookmarks",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "type": "module",
   "scripts": {
     "build": "bb plugin build",
@@ -33,8 +33,8 @@
     "bbPluginSdk": ">=0.6.37 <0.7.0"
   },
   "bb": {
-    "name": "Bookmarks / \u4e66\u7b7e",
-    "description": "Save conversation text, browse by project, and jump back to the source message. / \u6536\u85cf\u4f1a\u8bdd\u6587\u5b57\u5e76\u8df3\u56de\u539f\u6d88\u606f\u3002",
+    "name": "Bookmarks",
+    "description": "Save conversation text, browse by project, and jump back to the source message.",
     "branding": {
       "icon": "./assets/bookmark.svg",
       "experimental_icons": {
