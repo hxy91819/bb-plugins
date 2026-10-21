@@ -12,6 +12,7 @@ import {
 import { bookmarkSchema, groupBookmarks, type Bookmark, type rpcContract } from "./contract";
 
 import { messages, resolveLanguage, formatDate, readLanguageSetting, type Language } from "./i18n";
+const actionButtonClassName = "cursor-pointer rounded-md px-2 py-1 text-xs transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50";
 let target: { threadId: string; id: string } | null = null;
 const listeners = new Set<() => void>();
 const subscribe = (listener: () => void) => {
@@ -86,7 +87,7 @@ function BookmarkRow({
       className={`rounded-lg border bg-card p-3 space-y-2 ${highlighted ? "border-primary ring-2 ring-primary" : "border-border"}`}
     >
       <button
-        className="block w-full text-left space-y-2"
+        className="block w-full cursor-pointer rounded text-left space-y-2 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onClick={open}
         aria-label={m.open(title)}
       >
@@ -113,13 +114,13 @@ function BookmarkRow({
             maxLength={20000}
             onChange={(event) => setNote(event.target.value)}
           />
-          <button disabled={pending} type="submit" className="text-sm underline">
+          <button disabled={pending} type="submit" className={actionButtonClassName}>
             {m.saveNote}
           </button>{" "}
           <button
             type="button"
             disabled={pending}
-            className="text-sm underline"
+            className={actionButtonClassName}
             onClick={() => setEditing(false)}
           >
             {m.cancel}
@@ -133,6 +134,7 @@ function BookmarkRow({
       <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
         <time dateTime={bookmark.createdAt}>{formatDate(bookmark.createdAt, language)}</time>
         <button
+          className={actionButtonClassName}
           disabled={pending}
           onClick={() =>
             void run(async () => {
@@ -145,6 +147,7 @@ function BookmarkRow({
           {m.copy}
         </button>
         <button
+          className={actionButtonClassName}
           disabled={pending}
           onClick={() => {
             setNote(bookmark.note);
@@ -154,6 +157,7 @@ function BookmarkRow({
           {m.editNote}
         </button>
         <button
+          className={actionButtonClassName}
           disabled={pending}
           onClick={() => void run(() => rpc.call("remove", { id: bookmark.id }), m.removed, m.removeError)}
         >
@@ -168,12 +172,6 @@ function BookmarksPanel({ threadId, language }: PluginThreadPanelProps & { langu
   const m = messages[language];
   const rpc = useRpc<typeof rpcContract>();
   const sdk = useSdk();
-  const navigate = useBbNavigate();
-  useEffect(() => {
-    // The host persists tab titles. Reopen this already visible tab to refresh
-    // its title from the current registration without creating another tab.
-    navigate.openThreadPanel({ actionId: "bookmarks" });
-  }, [navigate.openThreadPanel]);
   const requestedTarget = useSyncExternalStore(subscribe, getTarget);
   const selectedId = requestedTarget?.threadId === threadId ? requestedTarget.id : null;
   const [projectId, setProjectId] = useState<string | null>(null);
@@ -261,7 +259,7 @@ function BookmarksPanel({ threadId, language }: PluginThreadPanelProps & { langu
       {error ? (
         <p role="alert" className="text-sm text-destructive">
           {error}{" "}
-          <button className="underline" onClick={refresh}>
+          <button className={actionButtonClassName} onClick={refresh}>
             {m.retry}
           </button>
         </p>
@@ -331,13 +329,15 @@ export function createBookmarksApp(setting: unknown, browserLanguage = typeof na
         }
       },
     });
-    app.slots.threadPanelAction({
+    const panel = {
       id: "bookmarks",
+      experimental_pinned: true,
       title: m.panel,
       icon: "bookmarks/bookmark",
-      layout: "flush",
-      component: (props) => <BookmarksPanel {...props} language={language} />,
-    });
+      layout: "flush" as const,
+      component: (props: PluginThreadPanelProps) => <BookmarksPanel {...props} language={language} />,
+    };
+    app.slots.threadPanelAction(panel);
   });
 }
 

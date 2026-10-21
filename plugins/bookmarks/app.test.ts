@@ -2,6 +2,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { makeThreadResponse } from "@get-bb/plugin-sdk/testing";
+import { definePluginApp } from "@get-bb/plugin-sdk/app";
 import { listInput, type Bookmark } from "./contract";
 import { createBookmarksApp } from "./app";
 import { formatDate, readLanguageSetting, resolveLanguage } from "./i18n";
@@ -38,7 +39,18 @@ test("选区和消息按钮保存原文，成功打开同一书签面板，失�
     return Response.json({ ok: true, result: bookmark(`new-${requests.length}`, "thread-a") });
   };
   try {
-    const captured = await loadPluginApp(app);
+    let pin: unknown;
+    const captured = await loadPluginApp(definePluginApp((builder) => app.setup({
+      ...builder,
+      slots: {
+        ...builder.slots,
+        threadPanelAction(registration) {
+          pin = Reflect.get(registration, "experimental_pinned");
+          builder.slots.threadPanelAction(registration);
+        },
+      },
+    })));
+    assert.equal(pin, true);
     assert.deepEqual(captured.navPanels, []);
     assert.equal(captured.threadPanelActions[0].id, "bookmarks");
     const action = captured.messageActions.find((item) => item.id === "add-bookmark")!;
@@ -147,9 +159,7 @@ test("browser language and explicit overrides apply to registration, panel, date
     });
     try {
       await slot.findByText(zh ? "共 1 条" : "1 bookmark");
-      assert.deepEqual(slot.inspection.navigateCalls[0], {
-        method: "openThreadPanel", options: { actionId: "bookmarks" },
-      });
+      assert.deepEqual(slot.inspection.navigateCalls, []);
 
       assert.ok(slot.getByRole("checkbox", { name: zh ? "仅当前项目" : "Current project only" }));
       assert.ok(slot.getByRole("button", { name: zh ? "打开书签：未命名会话" : "Open bookmark: Untitled thread" }));
