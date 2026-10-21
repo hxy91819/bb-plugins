@@ -225,10 +225,9 @@ try {
     bookmarks.bookmarks[0].text,
     "Migration must retain this saved text",
   );
-  assert.equal(
-    (await cli(["plugin", "config", "bookmarks"])).values.language,
-    "zh-CN",
-  );
+  const bookmarkSettings = await cli(["plugin", "config", "bookmarks"]);
+  assert.deepEqual(bookmarkSettings.schema, {});
+  assert.deepEqual(bookmarkSettings.values, {});
   await cli(["thread-list", "prefs", "set", "dateGrouping", "false"]);
   await run(node, [join(root, "scripts/migrate-native.mjs"), "thread-list"]);
   assert.equal(

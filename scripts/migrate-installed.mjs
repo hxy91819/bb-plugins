@@ -85,7 +85,11 @@ for (const name of names) {
       !["running", "disabled", "needs-configuration"].includes(current.status)
     )
       throw new Error(`Plugin ${name} did not activate`);
-    if (!directMove) restoreSettings(name, config.values);
+    if (!directMove) {
+      const values = { ...config.values };
+      if (name === "bookmarks") delete values.language;
+      restoreSettings(name, values);
+    }
     if (!previous.enabled) cli(["plugin", "disable", name, "--json"]);
     if (before) {
       const after = cli(["bookmarks", "list", "--limit", "1", "--json"]);

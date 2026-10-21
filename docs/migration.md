@@ -12,6 +12,8 @@ node scripts/migrate-installed.mjs team bookmarks acp-profile-icons
 
 脚本使用当前 `bb` CLI 的目标实例，支持标准 `BB_SERVER_URL`。已有本地路径插件通过 BB 的路径移动接口切换，保留启用状态、配置与存储。已有 Git 安装的书签插件在移除安装登记前保存配置，再安装相同 ID 的集合版本并恢复配置；BB 的移除操作保留插件数据库和 KV，书签数量与首条 ID 会在切换后核对。失败时恢复原安装地址与配置。
 
+现版书签界面统一英文，迁入集合时不再恢复旧版 `language` 设置；原值仍保存在私有回执中，失败回退到旧插件时完整恢复。
+
 每次迁移的回执保存在本机 `~/.cache/bb-plugin-migration/`，不进入仓库。当前脚本只适用于上述三个无凭据、无定时任务迁移的插件，不用于 provider 或账号池。
 
 迁移后的本机安装源是本集合的稳定 checkout 路径。以后 git pull 后重新构建并 `bb plugin reload <id>`。其他机器新装可直接使用 README 的 Git collection 安装命令；已安装机器先按本节保留数据迁移。
