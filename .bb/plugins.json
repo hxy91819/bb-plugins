@@ -22,6 +22,10 @@
     {
       "name": "acp-profile-icons",
       "source": "./plugins/acp-profile-icons"
+    },
+    {
+      "name": "machine-gateway",
+      "source": "./plugins/machine-gateway"
     }
   ]
 }
