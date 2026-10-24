@@ -68,7 +68,7 @@
     "tsx": "4.20.6",
     "typescript": "^5.7.0",
     "typescript-eslint": "8.71.2",
-    "vitest": "4.1.11",
+    "vitest": "4.1.12",
     "@testing-library/dom": "^10.4.1"
   },
   "description": "Trusted team attribution and retained activity; requires the compatible BB fork, not stock 0.46.0."
