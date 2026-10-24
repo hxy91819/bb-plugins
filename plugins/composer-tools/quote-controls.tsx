@@ -61,7 +61,8 @@ export function QuoteControls() {
         !composer.isSubmitting &&
         editor?.isContentEditable &&
         viewport &&
-        editor.getClientRects().length > 0
+        editor.getClientRects().length > 0 &&
+        getComputedStyle(editor).visibility === "visible"
       ) {
         const bounds = viewport.getBoundingClientRect();
         const quotes = Array.from(editor.querySelectorAll("blockquote"));
