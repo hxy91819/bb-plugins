@@ -26,6 +26,10 @@
     {
       "name": "machine-gateway",
       "source": "./plugins/machine-gateway"
+    },
+    {
+      "name": "composer-tools",
+      "source": "./plugins/composer-tools"
     }
   ]
 }
