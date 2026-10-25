@@ -1,0 +1,6 @@
+interface:
+  display_name: "ACP Compatibility"
+  short_description: "Prepare and verify plugin-managed ACP adapters"
+  default_prompt: "Use $acp-compat to prepare and verify an ACP adapter launch."
+policy:
+  allow_implicit_invocation: false

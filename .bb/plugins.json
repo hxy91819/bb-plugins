@@ -12,6 +12,10 @@
       "source": "./plugins/provider-acp"
     },
     {
+      "name": "acp-compat",
+      "source": "./plugins/acp-compat"
+    },
+    {
       "name": "team",
       "source": "./plugins/team"
     },

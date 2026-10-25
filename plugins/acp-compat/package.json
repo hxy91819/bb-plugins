@@ -1,0 +1,45 @@
+{
+  "name": "bb-plugin-acp-compat",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Plugin-managed ACP protocol adapters for existing agent providers.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hxy91819/bb-plugins.git",
+    "directory": "plugins/acp-compat"
+  },
+  "engines": {
+    "bb": ">=0.46",
+    "bbPluginSdk": ">=0.6.37"
+  },
+  "bb": {
+    "name": "ACP Compatibility",
+    "description": "Adapt agent ACP extensions while retaining the existing provider and shared bridge.",
+    "branding": {
+      "icon": "Cable"
+    },
+    "server": "./server.ts",
+    "host": "./host.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "bb plugin build .",
+    "lint": "oxlint .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@get-bb/plugin-sdk": "https://github.com/hxy91819/bb/releases/download/fork-v0.46.0-20261016.6/bb-plugin-sdk-fork-v0.46.0-20261016.6.tgz",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.2",
+    "oxlint": "^1.79.0",
+    "prettier": "3.8.3",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.1"
+  }
+}
