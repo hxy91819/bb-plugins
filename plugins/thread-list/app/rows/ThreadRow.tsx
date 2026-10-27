@@ -1,3 +1,4 @@
+import { useUnreadSideChats } from "../model/side-chats.js";
 import { ThreadListRowContext } from "../list/ThreadListRowContext.js";
 import {
   memo,
@@ -522,14 +523,22 @@ function ThreadRowComponent({
   const reserveActionSpace =
     crossProjectLabel !== null || (isParentRow && hasChildren);
   const hasHiddenChildren = isParentRow && isParentCollapsed && hasChildren;
-  const showUnreadReplies =
-    thread.archivedAt === null &&
-    thread.parentThreadId === null &&
-    thread.isUnread;
   const childActivity =
     parentOptions?.childActivity ?? NO_COLLAPSED_CHILD_ACTIVITY;
+  const hasUnreadSideChat = useUnreadSideChats(
+    thread.id,
+    hasHiddenChildren
+      ? childActivity.threadIds
+      : NO_COLLAPSED_CHILD_ACTIVITY.threadIds,
+  );
+  const showUnreadReplies =
+    thread.archivedAt === null &&
+    ((thread.parentThreadId === null && thread.isUnread) || hasUnreadSideChat);
   const trailingIndicatorState: ThreadListIndicatorState = {
     ...threadStatus,
+    hasUnreadSuccess:
+      threadStatus.hasUnreadSuccess ||
+      (thread.archivedAt === null && hasUnreadSideChat),
     isRuntimeActive:
       threadStatus.isRuntimeActive ||
       (hasHiddenChildren && childActivity.runtimeWorking),

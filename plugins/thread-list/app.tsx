@@ -1,9 +1,13 @@
-import { definePluginApp, type PluginThreadListProps } from "@get-bb/plugin-sdk/app";
+import {
+  definePluginApp,
+  type PluginThreadListProps,
+} from "@get-bb/plugin-sdk/app";
 import { CompactViewportOverrideProvider } from "@/components/ui/hooks/use-compact-viewport";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { PreferencesSync } from "./app/preferences/PreferencesSync.js";
 import { ProjectList } from "./app/list/ProjectList.js";
 import { useSidebarThreadReveal } from "./app/list/useSidebarThreadReveal.js";
+import { SideChatsSync, SideChatsPanel } from "./app/model/side-chats.js";
 import { moveThreadAction } from "./app/rows/moveThreadAction.js";
 
 function ThreadList({
@@ -16,6 +20,7 @@ function ThreadList({
     <CompactViewportOverrideProvider isCompactViewport={isCompactViewport}>
       <TooltipProvider>
         <PreferencesSync />
+        <SideChatsSync />
         <ProjectList
           activeThreadId={activeThreadId}
           onProjectSelect={onNavigate}
@@ -34,4 +39,11 @@ export default definePluginApp((app) => {
     component: ThreadList,
   });
   app.slots.experimental_threadAction(moveThreadAction);
+  app.slots.threadPanelAction({
+    id: "side-chats",
+    title: "Side chats",
+    icon: "SideChat",
+    component: SideChatsPanel,
+    layout: "flush",
+  });
 });

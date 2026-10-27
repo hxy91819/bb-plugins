@@ -38,6 +38,8 @@ import {
   makeSidebarEnvironment,
   makeSidebarThread,
 } from "../model/fixtures.js";
+import { makeThreadResponse } from "@get-bb/plugin-sdk/testing";
+import { sideChatsAtom } from "../model/side-chats.js";
 import { sidebarShowProviderIconsAtom } from "../preferences/atoms.js";
 import type { ThreadRowOptions } from "./ThreadRow.js";
 import {
@@ -338,12 +340,118 @@ function hostThreadActions({
 
 afterEach(() => {
   cleanup();
+  getDefaultStore().set(sideChatsAtom, []);
   vi.restoreAllMocks();
   resetSidebarTitleDoubleClickForTest();
   resetPreferencesSyncForTest();
 });
 
 describe("ThreadRow", () => {
+  it.each([
+    {
+      parentThreadId: null,
+      collapsed: false,
+      sourceId: "thr_test",
+      working: false,
+      unread: true,
+    },
+    {
+      parentThreadId: "parent",
+      collapsed: false,
+      sourceId: "thr_test",
+      working: false,
+      unread: true,
+    },
+    {
+      parentThreadId: "parent",
+      collapsed: false,
+      sourceId: "thr_test",
+      working: true,
+      unread: true,
+    },
+    {
+      parentThreadId: null,
+      collapsed: true,
+      sourceId: "child",
+      working: false,
+      unread: true,
+    },
+    {
+      parentThreadId: null,
+      collapsed: true,
+      sourceId: "child",
+      working: true,
+      unread: true,
+    },
+    {
+      parentThreadId: null,
+      collapsed: false,
+      sourceId: "child",
+      working: false,
+      unread: false,
+    },
+    {
+      parentThreadId: null,
+      collapsed: true,
+      sourceId: "other",
+      working: false,
+      unread: false,
+    },
+  ])(
+    "shows side-chat unread only on its owner or collapsed ancestor ($parentThreadId, $collapsed, $sourceId, $working)",
+    ({ parentThreadId, collapsed, sourceId, working, unread }) => {
+      getDefaultStore().set(sideChatsAtom, [
+        makeThreadResponse({
+          id: "side",
+          sourceThreadId: sourceId,
+          lastReadAt: 100,
+          latestAttentionAt: 200,
+        }),
+      ]);
+      const thread = createThread({
+        parentThreadId,
+        isUnread: false,
+        status: working ? "active" : "idle",
+        runtimeStatus: working ? "active" : "idle",
+      });
+      const row = renderThreadRow({
+        thread,
+        options: {
+          kind: "parent",
+          depth: 1,
+          isCompact: false,
+          isCollapsed: collapsed,
+          childCount: 1,
+          childActivity: {
+            ...NO_COLLAPSED_CHILD_ACTIVITY,
+            threadIds: ["child"],
+          },
+          onToggleCollapsed: vi.fn(),
+        },
+      });
+      expect(
+        Boolean(
+          screen.queryByRole("img", {
+            name: /Thread working with unread replies$/,
+          }),
+        ),
+      ).toBe(unread && working);
+      if (!working)
+        expect(renderedIndicators()).toEqual(unread ? ["unread-success"] : []);
+      row.rerenderThreadRow({ ...thread, isUnread: false, lastReadAt: 300 });
+      if (!working)
+        expect(renderedIndicators()).toEqual(unread ? ["unread-success"] : []);
+      act(() => getDefaultStore().set(sideChatsAtom, []));
+      expect(
+        screen.queryByRole("img", {
+          name: /Thread working with unread replies$/,
+        }),
+      ).toBeNull();
+      expect(renderedIndicators()).toEqual(working ? ["runtime"] : []);
+      expect(row.inspection.sdkCalls).toEqual([]);
+    },
+  );
+
   it("shows the registered provider icon by default and keeps it visible during inline rename", async () => {
     const provider: PluginProvidersState["providers"][number] = {
       id: "provider-test",
