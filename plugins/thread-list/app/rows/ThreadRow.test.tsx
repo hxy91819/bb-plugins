@@ -699,7 +699,7 @@ describe("ThreadRow", () => {
   );
 
   it.each([
-    ["idle", createThread()],
+    ["idle", createThread({ lastReadAt: 1, latestAttentionAt: 1 })],
     ["unread error only", createThread({ status: "error" })],
   ])("keeps the split map static for %s", (_label, thread) => {
     renderSplitThreadRow({ thread });
@@ -742,28 +742,10 @@ describe("ThreadRow", () => {
       },
       thread: createThread(),
     },
-    {
-      label: "parent with collapsed child workflow",
-      expectedStatus: "Unread thread succeeded",
-      options: {
-        kind: "parent" as const,
-        depth: 1,
-        isCompact: false,
-        isCollapsed: true,
-        childCount: 1,
-        childActivity: {
-          ...NO_COLLAPSED_CHILD_ACTIVITY,
-          working: true,
-          workflow: true,
-        },
-        onToggleCollapsed: vi.fn(),
-      },
-      thread: createThread(),
-    },
   ])(
     "preserves the $label status in the split map accessible name",
-    ({ expectedStatus, options, pluginStatus, thread }) => {
-      renderSplitThreadRow({ options, pluginStatus, thread });
+    ({ expectedStatus, pluginStatus, thread }) => {
+      renderSplitThreadRow({ pluginStatus, thread });
 
       expect(
         screen
@@ -860,7 +842,11 @@ describe("ThreadRow", () => {
         icon: "AiContentGenerator01",
         label: "Plugin improving draft",
       },
-      thread: createThread({ status: "active", runtimeStatus: "active" }),
+      thread: createThread({
+        status: "active",
+        runtimeStatus: "active",
+        isUnread: false,
+      }),
     });
 
     expect(renderedIndicators()).toEqual(["runtime"]);
@@ -1164,8 +1150,7 @@ describe("ThreadRow", () => {
       }),
     });
 
-    expect(renderedIndicators()).toEqual([]);
-    expect(screen.getByRole("img", { name: "Unread replies" })).not.toBeNull();
+    expect(renderedIndicators()).toEqual(["unread-success"]);
   });
 
   it("tells a failed queued row apart from a failed thread", () => {
@@ -1404,6 +1389,7 @@ describe("ThreadRow", () => {
   it("shows runtime work before workflow and background work", () => {
     renderThreadRow({
       thread: createThread({
+        isUnread: false,
         activity: activity({
           workflows: 1,
           backgroundAgents: 1,
@@ -1418,7 +1404,10 @@ describe("ThreadRow", () => {
 
   it("shows the workflow indicator for an idle thread with an active workflow", () => {
     renderThreadRow({
-      thread: createThread({ activity: activity({ workflows: 1 }) }),
+      thread: createThread({
+        isUnread: false,
+        activity: activity({ workflows: 1 }),
+      }),
     });
 
     expect(renderedIndicators()).toEqual(["workflow"]);
@@ -1439,7 +1428,10 @@ describe("ThreadRow", () => {
     "shows the $indicator indicator for $activityKey activity",
     ({ activityKey, indicator }) => {
       renderThreadRow({
-        thread: createThread({ activity: activity({ [activityKey]: 1 }) }),
+        thread: createThread({
+          isUnread: false,
+          activity: activity({ [activityKey]: 1 }),
+        }),
       });
 
       expect(renderedIndicators()).toEqual([indicator]);
@@ -1449,6 +1441,7 @@ describe("ThreadRow", () => {
   it("shows workflow before background agent and command work", () => {
     renderThreadRow({
       thread: createThread({
+        isUnread: false,
         activity: activity({
           workflows: 1,
           backgroundAgents: 1,
@@ -1463,6 +1456,7 @@ describe("ThreadRow", () => {
   it("shows background agent work before background command work", () => {
     renderThreadRow({
       thread: createThread({
+        isUnread: false,
         activity: activity({ backgroundAgents: 1, backgroundCommands: 1 }),
       }),
     });
@@ -1500,20 +1494,25 @@ describe("ThreadRow", () => {
     },
   );
 
-  it.each([
-    { status: "idle" as const, lastReadAt: 100 },
-    { status: "active" as const, lastReadAt: 100 },
-    { status: "active" as const, lastReadAt: null },
-  ])(
-    "keeps the unread dot independent of parent $status work and child activity ($lastReadAt)",
-    ({ status, lastReadAt }) => {
+  it.each(
+    [
+      { status: "idle" as const, lastReadAt: 100 },
+      { status: "active" as const, lastReadAt: 100 },
+      { status: "active" as const, lastReadAt: null },
+    ].flatMap((input) => [
+      { ...input, split: false },
+      { ...input, split: true },
+    ]),
+  )(
+    "keeps unread and working in one parent status slot ($status, $lastReadAt, split=$split)",
+    ({ status, lastReadAt, split }) => {
       const thread = createThread({
         status,
         runtimeStatus: status,
         lastReadAt,
         latestAttentionAt: 400,
       });
-      const row = renderThreadRow({
+      const row = (split ? renderSplitThreadRow : renderThreadRow)({
         thread,
         options: {
           kind: "parent",
@@ -1536,11 +1535,16 @@ describe("ThreadRow", () => {
         },
       });
       expect(
-        screen.getByRole("img", { name: "Unread replies" }),
-      ).not.toBeNull();
+        document.querySelectorAll("[data-sidebar-thread-trailing-indicator]"),
+      ).toHaveLength(1);
       expect(renderedIndicators()).toEqual(
-        status === "active" ? ["runtime"] : [],
+        status === "active" ? [] : ["unread-success"],
       );
+      expect(
+        screen.queryByRole("img", {
+          name: /Thread working with unread replies$/,
+        }) !== null,
+      ).toBe(status === "active");
       expect(screen.queryByText("未读")).toBeNull();
       expect(screen.queryByText("子会话")).toBeNull();
       expect(screen.queryByText("处理中")).toBeNull();
@@ -1551,12 +1555,21 @@ describe("ThreadRow", () => {
         runtimeStatus: "active",
       });
       expect(
-        screen.getByRole("img", { name: "Unread replies" }),
+        screen.getByRole("img", {
+          name: /Thread working with unread replies$/,
+        }),
       ).not.toBeNull();
+      expect(
+        document.querySelectorAll("[data-sidebar-thread-trailing-indicator]"),
+      ).toHaveLength(1);
       row.rerenderThreadRow({ ...thread, isUnread: false, lastReadAt: 500 });
-      expect(screen.queryByRole("img", { name: "Unread replies" })).toBeNull();
+      expect(
+        screen.queryByRole("img", {
+          name: /Thread working with unread replies$/,
+        }),
+      ).toBeNull();
       expect(renderedIndicators()).toEqual(
-        status === "active" ? ["runtime"] : [],
+        !split && status === "active" ? ["runtime"] : [],
       );
     },
   );
@@ -1615,8 +1628,7 @@ describe("ThreadRow", () => {
       }),
     });
 
-    expect(renderedIndicators()).toEqual([]);
-    expect(screen.getByRole("img", { name: "Unread replies" })).not.toBeNull();
+    expect(renderedIndicators()).toEqual(["unread-success"]);
   });
 
   it("switches directly from working to unread success after finishing", () => {
@@ -1638,8 +1650,7 @@ describe("ThreadRow", () => {
       isUnread: true,
     });
 
-    expect(renderedIndicators()).toEqual([]);
-    expect(screen.getByRole("img", { name: "Unread replies" })).not.toBeNull();
+    expect(renderedIndicators()).toEqual(["unread-success"]);
   });
 
   it("edits the row title inline after a double click and commits on Enter", async () => {

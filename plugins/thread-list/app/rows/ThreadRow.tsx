@@ -279,6 +279,29 @@ export function CollapsedThreadStatusGlyph({
   );
 }
 
+function UnreadWorkingGlyph({ label }: { label: string }) {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      className="size-4 text-muted-foreground"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      role="img"
+      aria-label={label}
+    >
+      <title>运行中，有未读消息</title>
+      <g className="animate-spin" style={{ transformOrigin: "10px 10px" }}>
+        <circle cx="10" cy="10" r="8" strokeDasharray="32 18" opacity="0.65" />
+      </g>
+      <rect x="5" y="6.5" width="10" height="7" rx="1" />
+      <path d="m5.5 7 4.5 3.5 4.5-3.5" />
+    </svg>
+  );
+}
+
 function ThreadTrailingIndicator({
   state,
   hideIdleDraftLabel,
@@ -512,6 +535,17 @@ function ThreadRowComponent({
     trailingIndicatorState,
     pluginThreadRowStatus?.tone === "running",
   );
+  const showUnreadWorkingStatus =
+    showUnreadReplies &&
+    splitIndicatorIsWorking &&
+    !trailingIndicatorState.hasPendingInteraction &&
+    !trailingIndicatorState.hasUnreadError &&
+    !trailingIndicatorState.hasUnsubmittedDraft &&
+    !trailingIndicatorResolution.rowStatusIsVisible;
+  const showUnreadIdleStatus =
+    showUnreadReplies &&
+    trailingIndicatorKind === "unread-success" &&
+    !trailingIndicatorResolution.rowStatusIsVisible;
   const splitIndicatorLabel = trailingIndicatorResolution.accessibleLabel
     ? `${labelTitle} — open in split; ${trailingIndicatorResolution.accessibleLabel}`
     : `${labelTitle} — open in split`;
@@ -688,7 +722,6 @@ function ThreadRowComponent({
           !shortcut &&
             !isEditing &&
             !isCustomizingActions &&
-            !showUnreadReplies &&
             !(parentOptions && hasChildren && quickActions.length === 0) &&
             (reserveActionSpace
               ? "pr-(--bb-sidebar-hover-actions-inset) [@media(hover:none)]:pr-0"
@@ -873,32 +906,6 @@ function ThreadRowComponent({
               COARSE_POINTER_COMPACT_ROW_HEIGHT_CLASS,
             )}
           >
-            {showUnreadReplies && (
-              <span
-                className={cn(
-                  "flex shrink-0 items-center",
-                  SIDEBAR_HOVER_ACTIONS_INSET_CLASS,
-                )}
-                style={getHoverActionsInsetStyle(quickActions.length)}
-              >
-                <span
-                  data-sidebar-thread-trailing-indicator=""
-                  role="img"
-                  aria-label="Unread replies"
-                  title="有未读消息"
-                  className={cn(
-                    "flex shrink-0 items-center justify-center",
-                    SIDEBAR_ROW_GLYPH_SLOT_CLASS,
-                    SIDEBAR_STATUS_GLYPH_BOX_CLASS,
-                  )}
-                >
-                  <span
-                    aria-hidden="true"
-                    className="size-1.5 rounded-full bg-muted-foreground"
-                  />
-                </span>
-              </span>
-            )}
             <span
               className={cn(
                 "relative shrink-0",
@@ -914,7 +921,23 @@ function ThreadRowComponent({
                   "absolute inset-0 flex items-center justify-center",
                 )}
               >
-                {miniMap ? (
+                {showUnreadWorkingStatus ? (
+                  <span
+                    data-sidebar-thread-trailing-indicator=""
+                    className={cn(
+                      SIDEBAR_ROW_GLYPH_SLOT_CLASS,
+                      SIDEBAR_STATUS_GLYPH_BOX_CLASS,
+                    )}
+                  >
+                    <UnreadWorkingGlyph
+                      label={
+                        miniMap
+                          ? `${labelTitle} — open in split; Thread working with unread replies`
+                          : "Thread working with unread replies"
+                      }
+                    />
+                  </span>
+                ) : miniMap && !showUnreadIdleStatus ? (
                   <span
                     data-sidebar-thread-trailing-indicator=""
                     className={cn(
@@ -928,9 +951,7 @@ function ThreadRowComponent({
                       isWorking={splitIndicatorIsWorking}
                     />
                   </span>
-                ) : showUnreadReplies &&
-                  trailingIndicatorKind === "unread-success" &&
-                  !trailingIndicatorResolution.rowStatusIsVisible ? null : (
+                ) : (
                   <ThreadTrailingIndicator
                     state={trailingIndicatorState}
                     hideIdleDraftLabel={
