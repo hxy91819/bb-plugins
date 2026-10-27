@@ -44,6 +44,7 @@ function SearchPanel({ threadId }: PluginThreadPanelProps) {
   const root = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const lastNavigation = useRef("");
+  const pendingFocus = useRef(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(-1);
   const [navigationRequest, setNavigationRequest] = useState(0);
@@ -84,27 +85,54 @@ function SearchPanel({ threadId }: PluginThreadPanelProps) {
     },
     [total],
   );
-  const focus = () => {
-    input.current?.focus();
-    input.current?.select();
-  };
+  const visible = useCallback(() => {
+    const element = root.current;
+    return (
+      element !== null &&
+      !element.closest('[inert], [hidden], [aria-hidden="true"]') &&
+      element.getClientRects().length > 0
+    );
+  }, []);
+  const focusPending = useCallback(() => {
+    if (!pendingFocus.current || !visible()) return;
+    const field = input.current;
+    field?.focus();
+    field?.select();
+    pendingFocus.current =
+      field === null || field.ownerDocument.activeElement !== field;
+  }, [visible]);
+  const focus = useCallback(() => {
+    pendingFocus.current = true;
+    focusPending();
+  }, [focusPending]);
   useEffect(() => {
-    const controller = {
-      focus,
-      move,
-      visible: () => (root.current?.getClientRects().length ?? 0) > 0,
+    const observer = new MutationObserver(focusPending);
+    let element: HTMLElement | null = root.current;
+    while (element) {
+      observer.observe(element, {
+        attributes: true,
+        attributeFilter: ["inert", "aria-hidden", "hidden", "style", "class"],
+      });
+      element = element.parentElement;
+    }
+    return () => {
+      observer.disconnect();
+      pendingFocus.current = false;
     };
+  }, [focusPending]);
+  useEffect(() => {
+    const controller = { focus, move, visible };
     controllers.set(threadId, controller);
     return () => {
       if (controllers.get(threadId) === controller)
         controllers.delete(threadId);
     };
-  }, [threadId, move]);
+  }, [threadId, move, focus, visible]);
   useEffect(() => {
     setQuery("");
     setActive(-1);
     focus();
-  }, [threadId]);
+  }, [threadId, focus]);
   useEffect(() => {
     if (!term) return;
     const controller = new AbortController();
@@ -285,8 +313,7 @@ function SearchPanel({ threadId }: PluginThreadPanelProps) {
               }}
             >
               <span className="mb-1 block text-xs text-muted-foreground">
-                {match.sourceKind === "user_message" ? "You" : "Assistant"} ·
-                Message {match.sourceSeq}
+                {match.sourceKind === "user_message" ? "You" : "Assistant"}
               </span>
               <span className="block whitespace-pre-wrap break-words text-sm">
                 {highlight(match)}

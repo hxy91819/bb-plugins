@@ -249,3 +249,91 @@ test("unsupported hosts explain the missing capability and search errors can be 
     slot.lifecycle.unmount();
   }
 });
+
+test("a collapsed retained search does not expose navigation commands", async () => {
+  const commands: PluginCommandRegistration[] = [];
+  const captured = await loadPluginApp(
+    definePluginApp((builder) =>
+      app.setup({
+        ...builder,
+        commands: {
+          register(command) {
+            commands.push(command);
+            builder.commands.register(command);
+          },
+        },
+      }),
+    ),
+  );
+  const slot = renderSlot(captured.threadPanelActions[0], {
+    threadId: "collapse",
+    params: null,
+  });
+  try {
+    const panel = slot.container.firstElementChild!;
+    Object.defineProperty(panel, "getClientRects", {
+      value: () => [new dom.window.DOMRect(0, 0, 400, 600)],
+    });
+    const next = commands.find((command) => command.id === "next")!;
+    const context = {
+      threadId: "collapse",
+      projectId: "p",
+      openPanel: () => true,
+    };
+    assert.equal(next.isAvailable?.(context), true);
+    slot.container.setAttribute("inert", "");
+    slot.container.setAttribute("aria-hidden", "true");
+    assert.equal(next.isAvailable?.(context), false);
+    slot.container.removeAttribute("inert");
+    slot.container.removeAttribute("aria-hidden");
+    assert.equal(next.isAvailable?.(context), true);
+  } finally {
+    slot.lifecycle.unmount();
+  }
+});
+
+test("reopening a retained panel focuses search after the host releases inert", async () => {
+  const commands: PluginCommandRegistration[] = [];
+  const captured = await loadPluginApp(
+    definePluginApp((builder) =>
+      app.setup({
+        ...builder,
+        commands: {
+          register(command) {
+            commands.push(command);
+            builder.commands.register(command);
+          },
+        },
+      }),
+    ),
+  );
+  const slot = renderSlot(captured.threadPanelActions[0], {
+    threadId: "focus",
+    params: null,
+  });
+  try {
+    const panel = slot.container.firstElementChild!;
+    Object.defineProperty(panel, "getClientRects", {
+      value: () => [new dom.window.DOMRect(0, 0, 400, 600)],
+    });
+    const field = slot.getByRole("searchbox");
+    const nativeFocus = field.focus.bind(field);
+    Object.defineProperty(field, "focus", {
+      value: () => {
+        if (!field.closest("[inert]")) nativeFocus();
+      },
+    });
+    field.blur();
+    slot.container.setAttribute("inert", "");
+    slot.container.setAttribute("aria-hidden", "true");
+    await commands
+      .find((command) => command.id === "find")!
+      .run({ threadId: "focus", projectId: "p", openPanel: () => true });
+    assert.equal(document.activeElement === field, false);
+    slot.container.removeAttribute("inert");
+    slot.container.removeAttribute("aria-hidden");
+    await waitFor(() => assert.equal(document.activeElement === field, true));
+  } finally {
+    slot.lifecycle.unmount();
+  }
+});
