@@ -34,6 +34,10 @@
     {
       "name": "composer-tools",
       "source": "./plugins/composer-tools"
+    },
+    {
+      "name": "thread-search",
+      "source": "./plugins/thread-search"
     }
   ]
 }
