@@ -33,6 +33,7 @@ import {
   resolveThreadListIndicator,
   resolveThreadStatus,
   threadListIndicatorStateForThread,
+  NO_COLLAPSED_CHILD_ACTIVITY,
   type CollapsedChildActivity,
   type ThreadListIndicatorState,
 } from "../model/thread-activity.js";
@@ -525,7 +526,28 @@ function ThreadRowComponent({
     thread.archivedAt === null &&
     thread.parentThreadId === null &&
     thread.isUnread;
-  const trailingIndicatorState = threadStatus;
+  const childActivity =
+    parentOptions?.childActivity ?? NO_COLLAPSED_CHILD_ACTIVITY;
+  const trailingIndicatorState: ThreadListIndicatorState = {
+    ...threadStatus,
+    isRuntimeActive:
+      threadStatus.isRuntimeActive ||
+      (hasHiddenChildren && childActivity.runtimeWorking),
+    isWorkflowActive:
+      threadStatus.isWorkflowActive ||
+      (hasHiddenChildren && childActivity.workflow),
+    isBackgroundAgentActive:
+      threadStatus.isBackgroundAgentActive ||
+      (hasHiddenChildren && childActivity.backgroundAgent),
+    isBackgroundCommandActive:
+      threadStatus.isBackgroundCommandActive ||
+      (hasHiddenChildren && childActivity.backgroundCommand),
+    isPlanModeActive:
+      threadStatus.isPlanModeActive ||
+      (hasHiddenChildren && childActivity.planMode),
+    isGoalActive:
+      threadStatus.isGoalActive || (hasHiddenChildren && childActivity.goal),
+  };
   const trailingIndicatorResolution = resolveThreadStatus(
     trailingIndicatorState,
     pluginThreadRowStatus,

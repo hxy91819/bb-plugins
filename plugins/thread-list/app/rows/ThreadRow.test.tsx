@@ -1465,14 +1465,15 @@ describe("ThreadRow", () => {
   });
 
   it.each([
+    { flag: "runtimeWorking" as const, indicator: "runtime" },
     { flag: "workflow" as const, indicator: "workflow" },
     { flag: "backgroundAgent" as const, indicator: "background-agent" },
     { flag: "backgroundCommand" as const, indicator: "background-command" },
     { flag: "planMode" as const, indicator: "plan-mode" },
     { flag: "goal" as const, indicator: "goal" },
   ])(
-    "does not roll collapsed child $indicator activity into the parent",
-    ({ flag }) => {
+    "rolls collapsed child $indicator work into a read parent without child unread state",
+    ({ flag, indicator }) => {
       renderThreadRow({
         thread: createThread({ lastReadAt: 1, latestAttentionAt: 1 }),
         options: {
@@ -1484,13 +1485,14 @@ describe("ThreadRow", () => {
           childActivity: {
             ...NO_COLLAPSED_CHILD_ACTIVITY,
             working: true,
+            unread: true,
             [flag]: true,
           },
           onToggleCollapsed: vi.fn(),
         },
       });
 
-      expect(renderedIndicators()).toEqual([]);
+      expect(renderedIndicators()).toEqual([indicator]);
     },
   );
 
@@ -1537,14 +1539,12 @@ describe("ThreadRow", () => {
       expect(
         document.querySelectorAll("[data-sidebar-thread-trailing-indicator]"),
       ).toHaveLength(1);
-      expect(renderedIndicators()).toEqual(
-        status === "active" ? [] : ["unread-success"],
-      );
+      expect(renderedIndicators()).toEqual([]);
       expect(
         screen.queryByRole("img", {
           name: /Thread working with unread replies$/,
         }) !== null,
-      ).toBe(status === "active");
+      ).toBe(true);
       expect(screen.queryByText("未读")).toBeNull();
       expect(screen.queryByText("子会话")).toBeNull();
       expect(screen.queryByText("处理中")).toBeNull();
@@ -1568,13 +1568,11 @@ describe("ThreadRow", () => {
           name: /Thread working with unread replies$/,
         }),
       ).toBeNull();
-      expect(renderedIndicators()).toEqual(
-        !split && status === "active" ? ["runtime"] : [],
-      );
+      expect(renderedIndicators()).toEqual(!split ? ["runtime"] : []);
     },
   );
 
-  it("does not show a hidden child draft on the parent", () => {
+  it("shows child work without treating a hidden child draft as a parent draft", () => {
     renderThreadRow({
       thread: createThread({ lastReadAt: 1, latestAttentionAt: 1 }),
       hiddenDraftThreadIds: ["thr_hidden_child"],
@@ -1588,14 +1586,13 @@ describe("ThreadRow", () => {
           ...NO_COLLAPSED_CHILD_ACTIVITY,
           threadIds: ["thr_hidden_child"],
           working: true,
-          planMode: true,
-          goal: true,
+          runtimeWorking: true,
         },
         onToggleCollapsed: vi.fn(),
       },
     });
 
-    expect(renderedIndicators()).toEqual([]);
+    expect(renderedIndicators()).toEqual(["runtime"]);
   });
 
   it("ignores hidden child activity once the parent is expanded", () => {
