@@ -58,6 +58,7 @@ import {
   type PluginThreadActionsTriggerProps,
   type PluginSidebarThreadRowStatus,
 } from "@get-bb/plugin-sdk/app";
+import { useUnreadTurnCount } from "../model/use-unread-turn-count.js";
 import type { SidebarThread } from "../model/sidebar-thread.js";
 import {
   NO_THREAD_IDS,
@@ -507,37 +508,24 @@ function ThreadRowComponent({
   const hiddenChildrenHaveDraft = useThreadsHaveDraft(
     hasHiddenChildren ? childActivity.threadIds : NO_THREAD_IDS,
   );
+  const unreadTurnCount = useUnreadTurnCount(thread);
+  const showUnreadReplies =
+    unreadTurnCount === null ? thread.status !== "error" : unreadTurnCount > 0;
+  const unreadReplyLabel =
+    unreadTurnCount === null
+      ? "Unread replies"
+      : `${unreadTurnCount} unread completed replies`;
   const trailingIndicatorState: ThreadListIndicatorState = {
-    hasPendingInteraction:
-      threadStatus.hasPendingInteraction ||
-      (hasHiddenChildren && childActivity.pending),
-    hasUnsubmittedDraft:
-      threadStatus.hasUnsubmittedDraft || hiddenChildrenHaveDraft,
-    hasUnreadError:
-      threadStatus.hasUnreadError ||
-      (hasHiddenChildren && childActivity.unreadError),
-    hasUnreadSuccess:
-      threadStatus.hasUnreadSuccess ||
-      (hasHiddenChildren && childActivity.unread),
-    isBackgroundAgentActive:
-      threadStatus.isBackgroundAgentActive ||
-      (hasHiddenChildren && childActivity.backgroundAgent),
-    isBackgroundCommandActive:
-      threadStatus.isBackgroundCommandActive ||
-      (hasHiddenChildren && childActivity.backgroundCommand),
-    isGoalActive:
-      threadStatus.isGoalActive || (hasHiddenChildren && childActivity.goal),
-    queuedWork: threadStatus.queuedWork,
-    isPlanModeActive:
-      threadStatus.isPlanModeActive ||
-      (hasHiddenChildren && childActivity.planMode),
-    isRuntimeActive:
-      threadStatus.isRuntimeActive ||
-      (hasHiddenChildren && childActivity.runtimeWorking),
-    isWorkflowActive:
-      threadStatus.isWorkflowActive ||
-      (hasHiddenChildren && childActivity.workflow),
+    ...threadStatus,
+    hasUnreadSuccess: showUnreadReplies ? false : threadStatus.hasUnreadSuccess,
   };
+  const showChildActivity =
+    hasHiddenChildren &&
+    (childActivity.working ||
+      childActivity.pending ||
+      childActivity.unread ||
+      childActivity.unreadError ||
+      hiddenChildrenHaveDraft);
   const trailingIndicatorResolution = resolveThreadStatus(
     trailingIndicatorState,
     pluginThreadRowStatus,
@@ -907,6 +895,32 @@ function ThreadRowComponent({
               COARSE_POINTER_COMPACT_ROW_HEIGHT_CLASS,
             )}
           >
+            {showUnreadReplies && (
+              <span
+                role="img"
+                aria-label={unreadReplyLabel}
+                title={unreadReplyLabel}
+                className="flex shrink-0 items-center gap-1 text-ui-xs text-muted-foreground"
+              >
+                <ThreadStatusGlyph indicator="unread-success" />
+                {unreadTurnCount !== null && <span>{unreadTurnCount}</span>}
+              </span>
+            )}
+            {showChildActivity && (
+              <span
+                className="flex shrink-0 items-center gap-1 px-1 text-ui-xs text-muted-foreground"
+                title="Collapsed child thread activity"
+              >
+                <CollapsedThreadStatusGlyph activity={childActivity} />
+                {childActivity.workingThreadCount > 0 && (
+                  <span
+                    aria-label={`${childActivity.workingThreadCount} child threads running`}
+                  >
+                    {childActivity.workingThreadCount}
+                  </span>
+                )}
+              </span>
+            )}
             <span
               className={cn(
                 "relative shrink-0",

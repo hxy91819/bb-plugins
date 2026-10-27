@@ -7,7 +7,7 @@ BB 插件集合：团队身份、会话书签、ACP 图标，以及从个人 BB 
 | `team`              | `team`               | 团队身份、线程归属与有界活动查询                  |
 | `bookmarks`         | `bookmarks`          | 会话文字书签与原消息定位                          |
 | `acp-profile-icons` | `acp-profile-icons`  | ACP provider 的本地图标                           |
-| `thread-list`       | `thread-list-extras` | 日期分组、项目标签、父线程操作偏好及完整侧栏      |
+| `thread-list`       | `thread-list-extras` | 日期分组、项目标签、父子状态分显、未读完成轮次及完整侧栏      |
 | `acp`               | `acp-extensions`     | 自定义 ACP agent、能力探测、历史 fork 与 DSH 注册 |
 | `acp-compat`        | `acp-compat`         | 插件托管的 ACP 协议适配与原生 steer，复用现有 provider |
 | `machine-gateway`   | `machine-gateway`    | 自托管 HTTPS 机器入口、独立凭据与撤销            |
