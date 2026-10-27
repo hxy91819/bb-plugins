@@ -1164,7 +1164,8 @@ describe("ThreadRow", () => {
       }),
     });
 
-    expect(renderedIndicators()).toEqual(["unread-success"]);
+    expect(renderedIndicators()).toEqual([]);
+    expect(screen.getByRole("img", { name: "Unread replies" })).not.toBeNull();
   });
 
   it("tells a failed queued row apart from a failed thread", () => {
@@ -1476,8 +1477,8 @@ describe("ThreadRow", () => {
     { flag: "planMode" as const, indicator: "plan-mode" },
     { flag: "goal" as const, indicator: "goal" },
   ])(
-    "shows the $indicator indicator for collapsed parent rows with hidden child activity",
-    ({ flag, indicator }) => {
+    "does not roll collapsed child $indicator activity into the parent",
+    ({ flag }) => {
       renderThreadRow({
         thread: createThread({ lastReadAt: 1, latestAttentionAt: 1 }),
         options: {
@@ -1495,118 +1496,72 @@ describe("ThreadRow", () => {
         },
       });
 
-      expect(renderedIndicators()).toEqual([indicator]);
+      expect(renderedIndicators()).toEqual([]);
     },
   );
 
-  it.each(["idle", "active"] as const)(
-    "keeps unread completed replies beside child work while the parent is %s",
-    async (status) => {
+  it.each([
+    { status: "idle" as const, lastReadAt: 100 },
+    { status: "active" as const, lastReadAt: 100 },
+    { status: "active" as const, lastReadAt: null },
+  ])(
+    "keeps the unread dot independent of parent $status work and child activity ($lastReadAt)",
+    ({ status, lastReadAt }) => {
       const thread = createThread({
         status,
         runtimeStatus: status,
-        lastReadAt: 100,
+        lastReadAt,
         latestAttentionAt: 400,
       });
-      const events = vi.fn().mockResolvedValue([
-        {
-          type: "turn/completed",
-          seq: 4,
-          createdAt: 350,
-          data: { status: "completed" },
-        },
-        {
-          type: "turn/completed",
-          seq: 3,
-          createdAt: 300,
-          data: { status: "failed" },
-        },
-        {
-          type: "turn/completed",
-          seq: 2,
-          createdAt: 200,
-          data: { status: "completed" },
-        },
-        {
-          type: "turn/completed",
-          seq: 1,
-          createdAt: 100,
-          data: { status: "completed" },
-        },
-      ]);
       const row = renderThreadRow({
         thread,
-        sdk: { threads: { events: { list: events } } },
         options: {
           kind: "parent",
           depth: 1,
           isCompact: false,
           isCollapsed: true,
-          childCount: 3,
+          childCount: 2,
           childActivity: getCollapsedChildActivity([
             createThread({
               id: "child-1",
               status: "active",
               runtimeStatus: "active",
-              activity: activity({ workflows: 1 }),
             }),
             createThread({
               id: "child-2",
               activity: activity({ backgroundAgents: 1 }),
             }),
-            createThread({
-              id: "child-3",
-              lastReadAt: 1,
-              latestAttentionAt: 1,
-            }),
           ]),
           onToggleCollapsed: vi.fn(),
         },
       });
-      await screen.findByRole("img", { name: "2 unread completed replies" });
-      expect(screen.getByLabelText("2 child threads running").textContent).toBe(
-        "2",
-      );
+      expect(
+        screen.getByRole("img", { name: "Unread replies" }),
+      ).not.toBeNull();
       expect(renderedIndicators()).toEqual(
-        status === "active"
-          ? ["unread-success", "runtime", "runtime"]
-          : ["unread-success", "runtime"],
+        status === "active" ? ["runtime"] : [],
       );
+      expect(screen.queryByText("未读")).toBeNull();
+      expect(screen.queryByText("子会话")).toBeNull();
+      expect(screen.queryByText("处理中")).toBeNull();
+      expect(row.inspection.sdkCalls).toEqual([]);
       row.rerenderThreadRow({
         ...thread,
         status: "active",
         runtimeStatus: "active",
       });
       expect(
-        screen.getByRole("img", { name: "2 unread completed replies" }),
+        screen.getByRole("img", { name: "Unread replies" }),
       ).not.toBeNull();
       row.rerenderThreadRow({ ...thread, isUnread: false, lastReadAt: 500 });
-      expect(
-        screen.queryByRole("img", { name: "2 unread completed replies" }),
-      ).toBeNull();
-      expect(screen.getByLabelText("2 child threads running")).not.toBeNull();
+      expect(screen.queryByRole("img", { name: "Unread replies" })).toBeNull();
+      expect(renderedIndicators()).toEqual(
+        status === "active" ? ["runtime"] : [],
+      );
     },
   );
 
-  it("keeps manually unread replies visible while working without scanning all history", () => {
-    const events = vi.fn().mockResolvedValue([]);
-    const thread = createThread({
-      status: "active",
-      runtimeStatus: "active",
-      lastReadAt: null,
-    });
-    const row = renderThreadRow({
-      thread,
-      sdk: { threads: { events: { list: events } } },
-    });
-    expect(screen.getByRole("img", { name: "Unread replies" })).not.toBeNull();
-    expect(renderedIndicators()).toEqual(["unread-success", "runtime"]);
-    expect(events).not.toHaveBeenCalled();
-    row.rerenderThreadRow({ ...thread, isUnread: false, lastReadAt: 500 });
-    expect(screen.queryByRole("img", { name: "Unread replies" })).toBeNull();
-  });
-
-  it("shows a working draft for collapsed descendants before named work", () => {
+  it("does not show a hidden child draft on the parent", () => {
     renderThreadRow({
       thread: createThread({ lastReadAt: 1, latestAttentionAt: 1 }),
       hiddenDraftThreadIds: ["thr_hidden_child"],
@@ -1627,7 +1582,7 @@ describe("ThreadRow", () => {
       },
     });
 
-    expect(renderedIndicators()).toEqual(["working-draft"]);
+    expect(renderedIndicators()).toEqual([]);
   });
 
   it("ignores hidden child activity once the parent is expanded", () => {
@@ -1660,7 +1615,8 @@ describe("ThreadRow", () => {
       }),
     });
 
-    expect(renderedIndicators()).toEqual(["unread-success"]);
+    expect(renderedIndicators()).toEqual([]);
+    expect(screen.getByRole("img", { name: "Unread replies" })).not.toBeNull();
   });
 
   it("switches directly from working to unread success after finishing", () => {
@@ -1682,7 +1638,8 @@ describe("ThreadRow", () => {
       isUnread: true,
     });
 
-    expect(renderedIndicators()).toEqual(["unread-success"]);
+    expect(renderedIndicators()).toEqual([]);
+    expect(screen.getByRole("img", { name: "Unread replies" })).not.toBeNull();
   });
 
   it("edits the row title inline after a double click and commits on Enter", async () => {

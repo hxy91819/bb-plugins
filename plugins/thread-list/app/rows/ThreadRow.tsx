@@ -33,7 +33,6 @@ import {
   resolveThreadListIndicator,
   resolveThreadStatus,
   threadListIndicatorStateForThread,
-  NO_COLLAPSED_CHILD_ACTIVITY,
   type CollapsedChildActivity,
   type ThreadListIndicatorState,
 } from "../model/thread-activity.js";
@@ -58,12 +57,8 @@ import {
   type PluginThreadActionsTriggerProps,
   type PluginSidebarThreadRowStatus,
 } from "@get-bb/plugin-sdk/app";
-import { useUnreadTurnCount } from "../model/use-unread-turn-count.js";
 import type { SidebarThread } from "../model/sidebar-thread.js";
-import {
-  NO_THREAD_IDS,
-  useThreadsHaveDraft,
-} from "../list/sidebarDraftPresence.js";
+import { useThreadsHaveDraft } from "../list/sidebarDraftPresence.js";
 import { useSidebarProjectName } from "../model/use-sidebar-data.js";
 import {
   sidebarShowProviderIconsAtom,
@@ -499,33 +494,15 @@ function ThreadRowComponent({
   const isParentRow = parentOptions !== null;
   const isParentCollapsed = parentOptions?.isCollapsed ?? false;
   const childCount = parentOptions?.childCount ?? 0;
-  const childActivity =
-    parentOptions?.childActivity ?? NO_COLLAPSED_CHILD_ACTIVITY;
   const hasChildren = childCount > 0;
   const reserveActionSpace =
     crossProjectLabel !== null || (isParentRow && hasChildren);
   const hasHiddenChildren = isParentRow && isParentCollapsed && hasChildren;
-  const hiddenChildrenHaveDraft = useThreadsHaveDraft(
-    hasHiddenChildren ? childActivity.threadIds : NO_THREAD_IDS,
-  );
-  const unreadTurnCount = useUnreadTurnCount(thread);
   const showUnreadReplies =
-    unreadTurnCount === null ? thread.status !== "error" : unreadTurnCount > 0;
-  const unreadReplyLabel =
-    unreadTurnCount === null
-      ? "Unread replies"
-      : `${unreadTurnCount} unread completed replies`;
-  const trailingIndicatorState: ThreadListIndicatorState = {
-    ...threadStatus,
-    hasUnreadSuccess: showUnreadReplies ? false : threadStatus.hasUnreadSuccess,
-  };
-  const showChildActivity =
-    hasHiddenChildren &&
-    (childActivity.working ||
-      childActivity.pending ||
-      childActivity.unread ||
-      childActivity.unreadError ||
-      hiddenChildrenHaveDraft);
+    thread.archivedAt === null &&
+    thread.parentThreadId === null &&
+    thread.isUnread;
+  const trailingIndicatorState = threadStatus;
   const trailingIndicatorResolution = resolveThreadStatus(
     trailingIndicatorState,
     pluginThreadRowStatus,
@@ -711,6 +688,7 @@ function ThreadRowComponent({
           !shortcut &&
             !isEditing &&
             !isCustomizingActions &&
+            !showUnreadReplies &&
             !(parentOptions && hasChildren && quickActions.length === 0) &&
             (reserveActionSpace
               ? "pr-(--bb-sidebar-hover-actions-inset) [@media(hover:none)]:pr-0"
@@ -897,28 +875,28 @@ function ThreadRowComponent({
           >
             {showUnreadReplies && (
               <span
-                role="img"
-                aria-label={unreadReplyLabel}
-                title={unreadReplyLabel}
-                className="flex shrink-0 items-center gap-1 text-ui-xs text-muted-foreground"
-              >
-                <ThreadStatusGlyph indicator="unread-success" />
-                {unreadTurnCount !== null && <span>{unreadTurnCount}</span>}
-              </span>
-            )}
-            {showChildActivity && (
-              <span
-                className="flex shrink-0 items-center gap-1 px-1 text-ui-xs text-muted-foreground"
-                title="Collapsed child thread activity"
-              >
-                <CollapsedThreadStatusGlyph activity={childActivity} />
-                {childActivity.workingThreadCount > 0 && (
-                  <span
-                    aria-label={`${childActivity.workingThreadCount} child threads running`}
-                  >
-                    {childActivity.workingThreadCount}
-                  </span>
+                className={cn(
+                  "flex shrink-0 items-center",
+                  SIDEBAR_HOVER_ACTIONS_INSET_CLASS,
                 )}
+                style={getHoverActionsInsetStyle(quickActions.length)}
+              >
+                <span
+                  data-sidebar-thread-trailing-indicator=""
+                  role="img"
+                  aria-label="Unread replies"
+                  title="有未读消息"
+                  className={cn(
+                    "flex shrink-0 items-center justify-center",
+                    SIDEBAR_ROW_GLYPH_SLOT_CLASS,
+                    SIDEBAR_STATUS_GLYPH_BOX_CLASS,
+                  )}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="size-1.5 rounded-full bg-muted-foreground"
+                  />
+                </span>
               </span>
             )}
             <span
@@ -950,7 +928,9 @@ function ThreadRowComponent({
                       isWorking={splitIndicatorIsWorking}
                     />
                   </span>
-                ) : (
+                ) : showUnreadReplies &&
+                  trailingIndicatorKind === "unread-success" &&
+                  !trailingIndicatorResolution.rowStatusIsVisible ? null : (
                   <ThreadTrailingIndicator
                     state={trailingIndicatorState}
                     hideIdleDraftLabel={
