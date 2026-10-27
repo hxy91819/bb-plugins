@@ -5,6 +5,7 @@ BB 插件集合：团队身份、会话书签、ACP 图标，以及从个人 BB 
 | 安装名              | 插件 ID              | 用途                                              |
 | ------------------- | -------------------- | ------------------------------------------------- |
 | `team`              | `team`               | 团队身份、线程归属与有界活动查询                  |
+| `thread-search` | `thread-search` | 会话全文查找、匹配计数、原消息定位与快捷键 |
 | `bookmarks`         | `bookmarks`          | 会话文字书签与原消息定位                          |
 | `acp-profile-icons` | `acp-profile-icons`  | ACP provider 的本地图标                           |
 | `thread-list`       | `thread-list-extras` | 日期分组、项目标签、父子状态分显、未读完成轮次及完整侧栏      |
