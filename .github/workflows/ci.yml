@@ -22,18 +22,18 @@ jobs:
         run: node scripts/verify.mjs ci
       - run: for script in scripts/*.mjs; do node --check "$script"; done
       - if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: npm run lint
+        run: node scripts/runtime-toolchain.mjs npm run lint
       - if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: npm run typecheck
+        run: node scripts/runtime-toolchain.mjs npm run typecheck
       - if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: npm test
+        run: node scripts/runtime-toolchain.mjs npm test
       - if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         id: build
-        run: npm run build
+        run: node scripts/runtime-toolchain.mjs npm run build
       - if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: npm run test:migration
+        run: node scripts/runtime-toolchain.mjs npm run test:migration
       - if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: npm run format:check
+        run: node scripts/runtime-toolchain.mjs npm run format:check
       - if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: node scripts/verify.mjs audit
   secrets:

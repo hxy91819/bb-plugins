@@ -8,6 +8,7 @@ import {
   cp,
   chmod,
   rm,
+  symlink,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,6 +32,10 @@ async function fixture(run) {
       new URL("scripts/verify.mjs", root),
       join(directory, "scripts/verify.mjs"),
     );
+    await cp(
+      new URL("scripts/runtime-toolchain.mjs", root),
+      join(directory, "scripts/runtime-toolchain.mjs"),
+    );
     await writeFile(
       join(directory, ".bb/plugins.json"),
       JSON.stringify(collection),
@@ -48,7 +53,16 @@ async function fixture(run) {
       );
     }
     const logger = `#!${process.execPath}\nrequire('node:fs').appendFileSync(process.env.RUNNER_TEST_LOG, JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2),cli:process.env.BB_CLI??null,reexec:process.env.BB_CLI_REEXEC??null})+'\\n');\nprocess.exit(process.env.RUNNER_TEST_FAIL && process.cwd().endsWith(process.env.RUNNER_TEST_FAIL) ? 7 : 0);\n`;
-    for (const binary of ["npm", "bb"]) {
+    await symlink(process.execPath, join(directory, "runtime/bin/node"));
+    await mkdir(join(directory, "runtime/node_modules/npm/bin"), {
+      recursive: true,
+    });
+    for (const entry of ["npm-cli.js", "npx-cli.js"])
+      await writeFile(
+        join(directory, "runtime/node_modules/npm/bin", entry),
+        logger,
+      );
+    for (const binary of ["bb"]) {
       await writeFile(join(directory, "runtime/bin", binary), logger);
       await chmod(join(directory, "runtime/bin", binary), 0o755);
     }
@@ -165,5 +179,47 @@ test("a mismatched runtime is rejected before any member command", async () => {
       result.stderr.includes(`Use the documented BB ${supply.tag} runtime`),
     );
     assert.deepEqual(rows, []);
+  });
+});
+
+test("missing runtime npm fails before any package command", async () => {
+  await fixture(async ({ directory, invoke }) => {
+    await rm(join(directory, "runtime/node_modules/npm/bin/npm-cli.js"));
+    const { result, rows } = await invoke("ci");
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /Pinned runtime npm is missing or inaccessible/,
+    );
+    assert.deepEqual(rows, []);
+  });
+});
+
+test("package scripts inherit pinned npm and npx even with hostile host PATH", async () => {
+  await fixture(async ({ directory, invoke }) => {
+    const npm = join(directory, "runtime/node_modules/npm/bin/npm-cli.js");
+    const npx = join(directory, "runtime/node_modules/npm/bin/npx-cli.js");
+    await writeFile(
+      npm,
+      `const {execFileSync}=require('node:child_process');
+if(process.argv[2]==='run') {execFileSync('npm',['--version'],{stdio:'inherit'});execFileSync('npx',['--version'],{stdio:'inherit'});}
+else console.log('pinned-npm '+process.env.npm_execpath+' '+process.execPath);`,
+    );
+    await writeFile(
+      npx,
+      `console.log('pinned-npx '+process.env.npm_execpath+' '+process.execPath);`,
+    );
+    const { result } = await invoke("typecheck");
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      (result.stdout.match(/pinned-npm /g) ?? []).length,
+      collection.plugins.length,
+    );
+    assert.equal(
+      (result.stdout.match(/pinned-npx /g) ?? []).length,
+      collection.plugins.length,
+    );
+    assert.ok(result.stdout.includes(npm));
+    assert.ok(!result.stdout.includes("/must-not-use-parent-cli"));
   });
 });

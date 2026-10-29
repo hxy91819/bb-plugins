@@ -19,7 +19,7 @@ BB 插件集合：团队身份、会话书签、ACP 图标，以及从个人 BB 
 
 需要包含配套公共扩展的 BB fork。集合验证 runtime 固定为 `fork-v0.47.0-20261029.1`，source `1e9a1a3fb9c025922d144e04e110b668064ea07e`；相同 SDK 版本号不代表上游 npm 包包含这些接口。
 
-`file-download` 使用同 release 的 SDK 0.6.75；其他插件保留各自已锁定的 SDK。标准集合 CI/runner 包含新插件，新增的 runtime 基线仍待串行冷安装、全成员检查与构建验收；真实浏览器下载也尚未验收。
+`file-download` 使用同 release 的 SDK 0.6.75；其他插件保留各自已锁定的 SDK。标准集合 CI/runner 包含新插件，已完成全成员真实冷安装、检查、构建与隔离迁移验证；目标实例安装和真实浏览器下载尚未验收。
 
 ```sh
 bb plugin install git:https://github.com/hxy91819/bb-plugins.git@main --plugin bookmarks
@@ -34,13 +34,14 @@ bb plugin install git:https://github.com/hxy91819/bb-plugins.git@main --plugin a
 各插件使用自己的 package-lock.json，既能单独开发，也能在根目录串行验证，不依赖 BB monorepo workspace 包。
 
 ```sh
-npm run install:plugins
-npm run typecheck
-npm test
-BB_PLUGINS_RUNTIME_DIR=/path/to/bb-fork-v0.47.0-20261029.1 npm run build
+export BB_PLUGINS_RUNTIME_DIR=/path/to/bb-fork-v0.47.0-20261029.1
+node scripts/verify.mjs ci
+node scripts/runtime-toolchain.mjs npm run typecheck
+node scripts/runtime-toolchain.mjs npm test
+node scripts/runtime-toolchain.mjs npm run build
 ```
 
-重型检查遵循运行宿主的资源隔离约定。各插件的 SDK 固定为配套 BB Release 的公开 tarball URL，各 lockfile 记录实际 integrity；团队插件保留原有 .3 供应记录，集合联合构建使用根 bb-runtime.json 的兼容性基线。构建使用匹配 BB runtime 的 CLI；不把生成的 dist、凭据、诊断日志或本机存储提交到仓库。
+重型检查遵循运行宿主的资源隔离约定。各插件的 SDK 固定为配套 BB Release 的公开 tarball URL，各 lockfile 记录实际 integrity；团队插件保留原有 .3 供应记录，集合联合构建使用根 bb-runtime.json 的兼容性基线。标准 runner 先核对 runtime 的 tag/source，再明确使用其中的 bin/node 和 node_modules/npm/bin/npm-cli.js；临时 PATH 入口也把子脚本的 npm/npx 固定到同一份工具链，完成后清理。runtime 不完整时直接报错，不回退宿主 npm。构建使用匹配 BB runtime 的 CLI；不把生成的 dist、凭据、诊断日志或本机存储提交到仓库。
 
 验收记录：[五包检查及迁移回退](https://github.com/hxy91819/bb-plugins/actions/runs/39007931964)、[迁出后核心的源码 UI 与公开 Git 集合冷安装](https://github.com/hxy91819/bb-plugins/actions/runs/39009007741)。源码 UI 使用独立实例和合成线程，覆盖侧栏导航、标签与日期分组、普通 `/side` 消息及移动端长按 Queue 的实际队列结果。
 

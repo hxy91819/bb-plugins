@@ -228,8 +228,16 @@ try {
   const bookmarkSettings = await cli(["plugin", "config", "bookmarks"]);
   assert.deepEqual(bookmarkSettings.schema, {});
   assert.deepEqual(bookmarkSettings.values, {});
-  await cli(["thread-list", "prefs", "set", "dateGrouping", "false"]);
+  // The pinned 0.47 native list exposes unread grouping; dateGrouping is now
+  // owned by the collection plugin. Preserve an actual native preference and
+  // verify the destination's mutually exclusive date grouping as well.
+  await cli(["thread-list", "prefs", "set", "groupByReadStatus", "true"]);
   await run(node, [join(root, "scripts/migrate-native.mjs"), "thread-list"]);
+  assert.equal(
+    (await cli(["thread-list-extras", "prefs", "get", "groupByReadStatus"]))
+      .value,
+    true,
+  );
   assert.equal(
     (await cli(["thread-list-extras", "prefs", "get", "dateGrouping"])).value,
     false,

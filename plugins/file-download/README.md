@@ -29,14 +29,15 @@ BB SDK 声明浏览器/桌面使用下载，iOS shell 使用系统分享面板�
 集合 bb-runtime.json 与本插件统一使用 BB `fork-v0.47.0-20261029.1`，本插件锁定对应公开 SDK tarball（0.6.75）；其他插件的 SDK 不变。不能用同号但接口不同的上游包替代。标准 CI 经 fetch-runtime.mjs 获取校验过的 runtime，然后 verify.mjs ci/typecheck/test/build 串行覆盖全部成员。重型任务获串行资源后，在本目录执行：
 
 ```sh
-npm ci --no-audit --no-fund --legacy-peer-deps
-npm run typecheck
-npm test
-bb plugin build .
+export BB_PLUGINS_RUNTIME_DIR=/path/to/bb-fork-v0.47.0-20261029.1
+node ../../scripts/runtime-toolchain.mjs npm ci --no-audit --no-fund --legacy-peer-deps
+node ../../scripts/runtime-toolchain.mjs npm run typecheck
+node ../../scripts/runtime-toolchain.mjs npm test
+node ../../scripts/runtime-toolchain.mjs bb plugin build .
 ```
 
-所有检查应在宿主资源隔离 scope 中运行。`package-lock.json` 复用集合已锁定的工具链，SDK 换为上述实际发布包的 SHA-512，补齐其新增的 TanStack 依赖及与集合 thread-search 相同的 UI 测试工具链；本轮没有执行 npm 安装，需串行冷安装核验 lockfile。
+所有检查应在宿主资源隔离 scope 中运行。`package-lock.json` 复用集合已锁定的工具链，SDK 换为上述实际发布包的 SHA-512，补齐其新增的 TanStack 依赖及与集合 thread-search 相同的 UI 测试工具链；真实全成员冷 npmci 已核验本包 lockfile；验证固定使用 runtime 自带 Node/npm，脚本内 npm/npx 同样固定，不回退宿主全局工具链。
 
-本轮轻量验证使用真实发布 SDK 声明与现有工具链，只临时链接依赖；13 个行为夹具覆盖原始字节、host/root 选择、非法路径、错误传播，以及默认预览、预览 DOM/状态保留、防重复、失败重试和取消迟到下载。根 runner 另有 3 项命令编排夹具，验证十个成员的冷安装/types/tests/build 接入、失败传播和 runtime 来源拒绝；它们不是实际冷安装或构建。错误夹具验证传播，不代表实测了服务端拒绝策略。尚未执行真实 bundle 构建、插件安装或 live UI 验收。
+已在固定 runtime 上完成真实冷安装、types/tests/build 与集合 lint/format/audit/隔离迁移；13 个行为夹具覆盖原始字节、host/root 选择、非法路径、错误传播，以及默认预览、预览 DOM/状态保留、防重复、失败重试和取消迟到下载。根 runner 另有 5 项命令编排夹具，验证十个成员的冷安装/types/tests/build 接入、失败传播、runtime 来源拒绝、缺少npm时报错和嵌套npm/npx继承；它们之外的真实冷安装和构建也已执行。错误夹具验证传播，不代表实测了服务端拒绝策略。真实 bundle 已生成，目标实例插件安装和 live UI 验收仍待执行。
 
 安装后须验收：截图对应菜单入口；中文空格 HTML 下载后比较 SHA-256；两台 host 同路径不同内容；环境/线程存储；不存在、离线、越界符号链接与 25 MiB 限制；重复点击、关闭面板及禁用插件；桌面浏览器、窄屏移动浏览器和原生 shell。保留既有插件的 enabled、配置和数据。
