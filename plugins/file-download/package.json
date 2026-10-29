@@ -1,0 +1,42 @@
+{
+  "name": "bb-plugin-file-download",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "bb": ">=0.47.0",
+    "bbPluginSdk": ">=0.6.75 <0.7.0"
+  },
+  "bb": {
+    "name": "File Download",
+    "description": "Download original local files to the browser or device.",
+    "branding": {
+      "icon": "Download"
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx",
+    "skills": []
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "https://github.com/hxy91819/bb/releases/download/fork-v0.47.0-20261029.1/bb-plugin-sdk-fork-v0.47.0-20261029.1.tgz",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.7.0"
+  },
+  "description": "Download original local files to the browser or device.",
+  "license": "MIT",
+  "author": "hxy91819",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hxy91819/bb-plugins.git",
+    "directory": "plugins/file-download"
+  },
+  "scripts": {
+    "build": "bb plugin build .",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test download.test.ts"
+  }
+}

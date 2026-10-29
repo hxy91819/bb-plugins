@@ -13,10 +13,13 @@ BB 插件集合：团队身份、会话书签、ACP 图标，以及从个人 BB 
 | `acp-compat`        | `acp-compat`         | 插件托管的 ACP 协议适配与原生 steer，复用现有 provider |
 | `machine-gateway`   | `machine-gateway`    | 自托管 HTTPS 机器入口、独立凭据与撤销            |
 | `composer-tools`    | `composer-tools`     | 移动端逐段删除引用与当前草稿清空                  |
+| `file-download`     | `file-download`      | 将 HTML 等本地文件原始字节下载到浏览器设备；入口与限制见[插件说明](plugins/file-download/README.md) |
 
 ## 安装
 
 需要包含配套公共扩展的 BB fork。当前验证基线固定为 `fork-v0.46.0-20261016.6`，source `47d099969891cab18398dc4064e836040159e6a3`；相同 SDK 版本号不代表上游 npm 包包含这些接口。
+
+`file-download` 单独要求 `fork-v0.47.0-20261029.1` 的 SDK 0.6.75，尚未完成安装验收；集合根的旧 runtime 验证入口不能据此算作该插件已通过构建。其串行验证步骤见插件说明。
 
 ```sh
 bb plugin install git:https://github.com/hxy91819/bb-plugins.git@main --plugin bookmarks

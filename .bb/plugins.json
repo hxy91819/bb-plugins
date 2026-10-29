@@ -38,6 +38,10 @@
     {
       "name": "thread-search",
       "source": "./plugins/thread-search"
+    },
+    {
+      "name": "file-download",
+      "source": "./plugins/file-download"
     }
   ]
 }
