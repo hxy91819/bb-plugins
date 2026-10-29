@@ -6,11 +6,12 @@
     "verify": "node scripts/verify.mjs",
     "install:plugins": "node scripts/verify.mjs install",
     "typecheck": "node scripts/verify.mjs typecheck",
-    "test": "node scripts/verify.mjs test",
+    "test": "npm run test:runner && node scripts/verify.mjs test",
     "build": "node scripts/verify.mjs build",
     "format:check": "node scripts/verify.mjs format",
     "lint": "node scripts/verify.mjs lint",
-    "test:migration": "node scripts/smoke-migration.mjs"
+    "test:migration": "node scripts/smoke-migration.mjs",
+    "test:runner": "node --test scripts/verify.test.mjs"
   },
   "engines": {
     "node": ">=24"

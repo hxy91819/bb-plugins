@@ -1,7 +1,7 @@
 {
-  "tag": "fork-v0.46.0-20261016.6",
-  "source": "47d099969891cab18398dc4064e836040159e6a3",
-  "baseUrl": "https://github.com/hxy91819/bb/releases/download/fork-v0.46.0-20261016.6",
-  "filename": "bb-fork-v0.46.0-20261016.6-linux-x64.tar.gz",
-  "sha256": "3d86add2c2ea88f9870e8c12e22c1db212ce2a7b9356ad2d0b3a808ae7309619"
+  "tag": "fork-v0.47.0-20261029.1",
+  "source": "1e9a1a3fb9c025922d144e04e110b668064ea07e",
+  "baseUrl": "https://github.com/hxy91819/bb/releases/download/fork-v0.47.0-20261029.1",
+  "filename": "bb-fork-v0.47.0-20261029.1-linux-x64.tar.gz",
+  "sha256": "b3b196a30465a5bcffc76132a4b6300da8b01d89240e4382e54ef970bd78fa98"
 }
