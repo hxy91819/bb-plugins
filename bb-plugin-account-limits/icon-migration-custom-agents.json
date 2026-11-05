@@ -1,0 +1,15 @@
+[
+  {
+    "id": "copilot",
+    "displayName": "GitHub Copilot",
+    "command": "/root/.nvm/versions/node/v24.15.0/bin/copilot",
+    "args": [
+      "--acp"
+    ],
+    "permissionCli": {
+      "full": [
+        "--yolo"
+      ]
+    }
+  }
+]

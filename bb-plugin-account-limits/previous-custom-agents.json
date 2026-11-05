@@ -1,0 +1,18 @@
+[
+  {
+    "id": "kiro",
+    "displayName": "Kiro",
+    "command": "/root/.local/bin/kiro-cli",
+    "args": [
+      "acp"
+    ]
+  },
+  {
+    "id": "codexl",
+    "displayName": "CodexL",
+    "command": "/root/.nvm/versions/node/v24.15.0/bin/codex-acp",
+    "env": {
+      "CODEX_PATH": "/root/bin/codexl-bb"
+    }
+  }
+]
