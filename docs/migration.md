@@ -39,3 +39,11 @@ node scripts/migrate-native.mjs acp
 ## 配套核心
 
 团队、列表贡献、活动查询和消息定位仍依赖 BB fork 提供的公共扩展。ACP 共享 bridge 的 resume、steer、模型错误与 checkpoint 修复也仍由共享 SDK 交付；集合没有复制第二套协议实现。账号池 AI fallback 留在原账号池插件，Codex warning 过滤保留小补丁。
+
+## 旧非 Git 本地目录收口（2026-11-05）
+
+AGY 启动辅助入口现由 `tools/agy-launch` 管理，适配器锁定到当前在用 fork 的 commit，避免退回旧 npm 1.1.0。CodeBuddy 的旧取消代理已由集合 `acp-compat` 取代，不恢复旧实现。customAgents 只改 AGY args，保留其他配置；本机兼容命令 bb-codebuddy-acp 改为调用现有 acp-compat runner。无需重启服务。
+
+旧 local-agents、account-limits 0.5.0、local-providers 的完整源码、配置样例、隐藏 fixtures 和锁文件已保存到 [归档分支](https://github.com/hxy91819/bb-plugins/tree/archive/unmanaged-local-20261105)，SHA `219943f55372353ef74dd6c705c5f83a669eb88c`，逐文件摘要见该分支 SOURCE-SHA256.json；不保存 node_modules 与 dist。旧依赖仅作源码证据，不再安装。旧 account-limits 0.5.0 是注册 provider 的旧插件，不能覆盖当前独立看板 0.4.0；其版本号不表示新旧维护关系，当前 Git 源及安装保持原样。
+
+本机私有配置回执继续放在 bb-acp-config-migration 缓存，不进入 Git。停用的 local-providers 安装登记在保存配置后移除，数据库保留；不启用旧插件。

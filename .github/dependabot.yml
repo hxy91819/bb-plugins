@@ -8,6 +8,7 @@ updates:
       - /plugins/acp-profile-icons
       - /plugins/thread-list
       - /plugins/provider-acp
+      - /tools/agy-launch
     schedule:
       interval: weekly
     open-pull-requests-limit: 5

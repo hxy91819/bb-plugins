@@ -1,0 +1,10 @@
+{
+  "name": "bb-agy-launch",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "dependencies": {
+    "antigravity-acp": "https://codeload.github.com/hxy91819/antigravity-acp/tar.gz/3b4b7bde3d003b7400c4601e4579dbbb7c8a2967"
+  }
+}

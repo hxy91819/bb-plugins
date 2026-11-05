@@ -45,6 +45,8 @@ node scripts/runtime-toolchain.mjs npm run build
 
 验收记录：[五包检查及迁移回退](https://github.com/hxy91819/bb-plugins/actions/runs/39007931964)、[迁出后核心的源码 UI 与公开 Git 集合冷安装](https://github.com/hxy91819/bb-plugins/actions/runs/39009007741)。源码 UI 使用独立实例和合成线程，覆盖侧栏导航、标签与日期分组、普通 `/side` 消息及移动端长按 Queue 的实际队列结果。
 
+AGY 的独立启动辅助文件见 [tools/agy-launch](tools/agy-launch/README.md)，其依赖与入口由集合管理，ACP 适配器实现继续使用锁定的个人 fork。
+
 ## 维护
 
 集合清单以 [.bb/plugins.json](.bb/plugins.json) 为准。插件的用途、命令与操作限制留在各自目录；新增或升级插件时分别运行它的检查，再运行受影响的联合流程。既有插件保持 `team`、`bookmarks`、`acp-profile-icons` 的 ID 和追加式迁移，保证存储身份连续。

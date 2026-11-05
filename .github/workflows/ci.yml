@@ -16,7 +16,12 @@ jobs:
         with:
           node-version: 24.15.0
           cache: npm
-          cache-dependency-path: plugins/*/package-lock.json
+          cache-dependency-path: |
+            plugins/*/package-lock.json
+            tools/*/package-lock.json
+      - run: npm ci --prefix tools/agy-launch --ignore-scripts
+      - run: node --check tools/agy-launch/agy-entry.mjs
+      - run: npm audit --prefix tools/agy-launch
       - run: node scripts/fetch-runtime.mjs "$RUNNER_TEMP/bb-plugins-runtime"
       - id: install
         run: node scripts/verify.mjs ci

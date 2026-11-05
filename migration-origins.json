@@ -15,6 +15,16 @@
       "plugin": "acp-profile-icons",
       "repository": "git@github.com:hxy91819/bb-plugin-acp-profile-icons.git",
       "source": "8c8ce334fbd4c937b36b54c57a07814da0402558"
+    },
+    {
+      "tool": "agy-launch",
+      "repository": "https://github.com/hxy91819/antigravity-acp.git",
+      "source": "3b4b7bde3d003b7400c4601e4579dbbb7c8a2967",
+      "files": [
+        "agy-entry.mjs",
+        "LICENSE"
+      ],
+      "adaptation": "Import locked package index rather than checkout-local index"
     }
   ],
   "bbSource": "47d099969891cab18398dc4064e836040159e6a3"
