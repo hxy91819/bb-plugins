@@ -1,4 +1,5 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, renameSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
   bridgeRequestEnvelopeSchema,
@@ -28,6 +29,16 @@ const executionSchemas = new Map<
   }),
 );
 
+function writeAtomic(path: string, content: string): void {
+  const temporary = path + "." + randomUUID();
+  try {
+    writeFileSync(temporary, content, { mode: 0o600, flag: "wx" });
+    renameSync(temporary, path);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+}
+
 export function withDshAutoReview(
   delegate: ProviderBridgeEntry,
 ): ProviderBridgeEntry {
@@ -39,8 +50,8 @@ export function withDshAutoReview(
       mkdirSync(context.dataDir, { recursive: true });
       const selector = join(context.dataDir, "dsh-auto-review.mjs");
       overlay = join(context.dataDir, "dsh-auto-review.yml");
-      writeFileSync(selector, selectorSource, { mode: 0o600 });
-      writeFileSync(
+      writeAtomic(selector, selectorSource);
+      writeAtomic(
         overlay,
         JSON.stringify([
           {
@@ -53,7 +64,6 @@ export function withDshAutoReview(
             ],
           },
         ]),
-        { mode: 0o600 },
       );
       delegate.start?.(context);
     },
