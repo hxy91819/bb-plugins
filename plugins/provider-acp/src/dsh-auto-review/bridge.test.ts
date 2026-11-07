@@ -175,7 +175,7 @@ it.each([
     expect(forwarded.params.options).toMatchObject({
       permissionMode: internalMode,
       approvalReviewer: reviewer,
-      envVars: { BB_DSH_PERMISSION_PRESET: preset },
+      envVars: { DSH_SESSION_PERMISSION_PRESET: preset },
     });
     expect(
       forwarded.params.options.providerOptions.acpLaunchSpec.args,

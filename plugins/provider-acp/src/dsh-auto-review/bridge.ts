@@ -12,7 +12,7 @@ import {
   type ProviderBridgeEntry,
 } from "@get-bb/plugin-sdk/provider-bridge";
 import { experimental_acpLaunchSpecSchema } from "@get-bb/plugin-sdk/provider-bridge/acp";
-import { selectorSource } from "./selector.js";
+import { selectorSource } from "@hxy91819/dsh-plugins/session-permission/source";
 
 const executionSchemas = new Map<
   string,
@@ -124,7 +124,7 @@ export function withDshAutoReview(
                 : {}),
               envVars: {
                 ...parsed.data.options.envVars,
-                BB_DSH_PERMISSION_PRESET: preset,
+                DSH_SESSION_PERMISSION_PRESET: preset,
               },
               providerOptions: {
                 ...parsed.data.options.providerOptions,

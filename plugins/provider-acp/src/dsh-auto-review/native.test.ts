@@ -65,7 +65,7 @@ it.skipIf(!command).each([
           ...process.env,
           DSH_HOME: join(root, "home"),
           DSH_REVIEW_SMOKE_MODE: mode === "full" ? "deny" : mode,
-          BB_DSH_PERMISSION_PRESET:
+          DSH_SESSION_PERMISSION_PRESET:
             mode === "full" ? "danger-full-access" : "auto",
         },
         stdio: ["pipe", "pipe", "pipe"],
