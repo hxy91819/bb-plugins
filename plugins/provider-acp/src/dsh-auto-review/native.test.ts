@@ -14,7 +14,7 @@ import { createInterface } from "node:readline";
 import { expect, it } from "vitest";
 import { z } from "zod";
 import { experimental_defineProviderBridge } from "@get-bb/plugin-sdk/provider-bridge";
-import { withDshAutoReview } from "../src/bridge.js";
+import { withDshAutoReview } from "./bridge.js";
 
 const command = process.env.DSH_NATIVE_TEST_COMMAND;
 it.skipIf(!command).each([
@@ -23,6 +23,7 @@ it.skipIf(!command).each([
   { mode: "deny", approve: false, executed: false, prompts: 1 },
   { mode: "failed", approve: false, executed: false, prompts: 0 },
   { mode: "malformed", approve: false, executed: false, prompts: 0 },
+  { mode: "full", approve: false, executed: true, prompts: 0 },
 ])(
   "native DSH $mode approval=$approve executes=$executed",
   async ({ mode, approve, executed, prompts }) => {
@@ -63,7 +64,9 @@ it.skipIf(!command).each([
         env: {
           ...process.env,
           DSH_HOME: join(root, "home"),
-          DSH_REVIEW_SMOKE_MODE: mode,
+          DSH_REVIEW_SMOKE_MODE: mode === "full" ? "deny" : mode,
+          BB_DSH_PERMISSION_PRESET:
+            mode === "full" ? "danger-full-access" : "auto",
         },
         stdio: ["pipe", "pipe", "pipe"],
       },

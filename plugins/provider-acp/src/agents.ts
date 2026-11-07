@@ -33,6 +33,7 @@ export interface AcpAgentDefinition {
   permissionModes?: readonly ("accept-edits" | "auto" | "full")[];
   supportsServiceTier?: boolean;
   providerInstallation?: boolean;
+  nativeAutoReview?: boolean;
   nativeRootsResolver?: AcpNativeRootsResolver;
 }
 
@@ -123,6 +124,12 @@ export function customAcpAgentDefinition(
         : { permissionCli: agent.permissionCli }),
     },
     ...(agent.providerUsage ? { providerUsage: true } : {}),
+    ...(shipped?.nativeAutoReview === true
+      ? {
+          nativeAutoReview: true,
+          permissionModes: agent.permissionModes ?? shipped.permissionModes,
+        }
+      : {}),
     ...(agent.permissionModes === undefined
       ? {}
       : { permissionModes: agent.permissionModes }),

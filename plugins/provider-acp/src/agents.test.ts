@@ -446,6 +446,11 @@ describe("acpProviderDeclaration", () => {
     );
     expect(dsh.experimental_visibility).toBe("installed");
     expect(dsh.capabilities.fork).toBe("none");
+    expect(dsh.capabilities.permissionModes).toEqual([
+      "accept-edits",
+      "auto",
+      "full",
+    ]);
     expect(dsh.capabilities.reasoningLevels).toEqual([
       "none",
       "low",
@@ -453,6 +458,7 @@ describe("acpProviderDeclaration", () => {
       "max",
     ]);
     expect(dsh.experimental_bridgeOptions).toMatchObject({
+      dshNativeAutoReview: true,
       acpLaunchSpec: {
         command: "dsh",
         args: ["--profile", "acp"],

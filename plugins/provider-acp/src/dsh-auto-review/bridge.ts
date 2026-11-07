@@ -80,12 +80,8 @@ export function withDshAutoReview(
         delegate.handleLine(line);
         return;
       }
-      if (parsed.data.options.permissionMode !== "auto") {
-        io.sendError(
-          request.data.id,
-          -32602,
-          "DSH Auto Review requires permission mode auto.",
-        );
+      if (parsed.data.options.providerOptions?.dshNativeAutoReview !== true) {
+        delegate.handleLine(line);
         return;
       }
       const launch = experimental_acpLaunchSpecSchema.safeParse(
@@ -99,6 +95,13 @@ export function withDshAutoReview(
         );
         return;
       }
+      const mode = parsed.data.options.permissionMode;
+      const preset =
+        mode === "auto"
+          ? "auto"
+          : mode === "full"
+            ? "danger-full-access"
+            : "workspace-write";
       delegate.handleLine(
         JSON.stringify({
           ...request.data,
@@ -106,8 +109,13 @@ export function withDshAutoReview(
             ...parsed.data,
             options: {
               ...parsed.data.options,
-              permissionMode: "accept-edits",
-              approvalReviewer: "user",
+              ...(mode === "auto"
+                ? { permissionMode: "accept-edits", approvalReviewer: "user" }
+                : {}),
+              envVars: {
+                ...parsed.data.options.envVars,
+                BB_DSH_PERMISSION_PRESET: preset,
+              },
               providerOptions: {
                 ...parsed.data.options.providerOptions,
                 acpLaunchSpec: {

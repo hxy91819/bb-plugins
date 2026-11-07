@@ -6,9 +6,10 @@ import { resolveAcpNativeRoots } from "./native-roots/index.js";
 
 import { experimental_acpProviderBridge } from "@get-bb/plugin-sdk/provider-bridge/acp";
 import { withAgyUsage } from "./usage-bridge.js";
+import { withDshAutoReview } from "./dsh-auto-review/bridge.js";
 
-export const experimental_providerBridge = withAgyUsage(
-  experimental_acpProviderBridge,
+export const experimental_providerBridge = withDshAutoReview(
+  withAgyUsage(experimental_acpProviderBridge),
 );
 
 export default experimental_defineHostEntry({

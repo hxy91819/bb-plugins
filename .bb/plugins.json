@@ -42,10 +42,6 @@
     {
       "name": "file-download",
       "source": "./plugins/file-download"
-    },
-    {
-      "name": "dsh-auto-review",
-      "source": "./plugins/dsh-auto-review"
     }
   ]
 }

@@ -199,6 +199,8 @@ export const KNOWN_ACP_AGENTS: readonly AcpAgentDefinition[] = [
   },
   {
     id: "acp-dsh",
+    nativeAutoReview: true,
+    permissionModes: ["accept-edits", "auto", "full"],
     displayName: "DeepSeek Harness",
     icon: declaredIcon("dsh"),
     iconTint: { light: "#4D6BFE", dark: "#4D6BFE" },

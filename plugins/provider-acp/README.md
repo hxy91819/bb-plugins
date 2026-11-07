@@ -79,3 +79,13 @@ command; keep its executable separate from display plugins.
 Native Codex/Claude/Pi providers, Account Pooler credentials/routing, and dashboard
 preferences retain their respective BB configuration owners. This ACP setting
 never modifies account-pool routing or selects a model-routing policy.
+
+## DSH Approve for me
+
+The existing `acp-dsh` provider offers `accept-edits`, `auto` (Approve for me), and `full`. Choose Approve for me in BB, pass `--permission-mode auto` to `bb thread spawn`, or use provider `acp-dsh` and `permissionMode: "auto"` through the SDK. No additional provider or account is created. Model routes and credentials stay in the existing DSH ACP profile.
+
+`src/dsh-auto-review/bridge.ts` wraps the public shared ACP bridge only when the registered agent declares native DSH Auto review. It writes a DSH overlay and companion plugin to private host data, mounts `@deepseek-ai/dsh-experimental-auto-review`, and selects the requested native preset for new/restored root sessions. The selected preset is pinned in the launch environment so the shared bridge rebuilds and resumes the same DSH session on mode changes, including Full access → Auto → Full access. The native review package stays mounted across modes so recorded Auto sessions can be restored before selecting another preset. The shared bridge receives `accept-edits` internally, preserving user confirmation after a reviewer denial. Full access retains its non-reviewing execution policy; other providers retain their prior path.
+
+Requires DSH 0.2.2-rc.1 with its Auto review package available to the profile loader. The installed distribution ships it. An ACP profile already mounting that package must remove the duplicate layer or use a separate profile. Missing native integration fails startup/session creation without falling back to Full access. DSH Auto review uses full host access after approval; direct Node side effects inside PTC remain outside its native review coverage.
+
+For native process verification, set `DSH_NATIVE_TEST_COMMAND` to the installed DSH executable when running this plugin's test script through the pinned runtime. The tests isolate DSH_HOME and script only model outputs: real tool execution covers allow, deny, user approval/rejection, reviewer failure, malformed responses and session resume. CI without DSH runs the bridge tests and explicitly skips native process tests. Live BB approval and real model smokes are separate verification.

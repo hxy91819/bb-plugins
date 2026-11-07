@@ -67,6 +67,7 @@ export function acpProviderDeclaration(
       ? {}
       : { experimental_resolvesNativeRoots: true }),
     experimental_bridgeOptions: {
+      ...(agent.nativeAutoReview === true ? { dshNativeAutoReview: true } : {}),
       ...(agent.dialect === undefined ? {} : { acpDialect: agent.dialect }),
       ...(agent.steeringMode === undefined
         ? {}
