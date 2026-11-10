@@ -1,5 +1,6 @@
 import { cliCommand, defineCli, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { hostContract, rpcContract } from "./src/contract.js";
+import { adapterIdSchema } from "./src/adapters/index.js";
 import { launchInputSchema } from "./src/launch.js";
 export default function acpCompatPlugin(bb: BbPluginApi): void {
   const host = bb.hosts.experimental_client({ contract: hostContract });
@@ -31,7 +32,7 @@ export default function acpCompatPlugin(bb: BbPluginApi): void {
             },
             adapter: {
               type: "enum",
-              values: ["passthrough", "codebuddy"],
+              values: adapterIdSchema.options,
               required: true,
               description: "Protocol adapter",
             },

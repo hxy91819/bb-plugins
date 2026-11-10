@@ -23,6 +23,11 @@ jobs:
       - run: node --check tools/agy-launch/agy-entry.mjs
       - run: npm audit --prefix tools/agy-launch
       - run: node scripts/fetch-runtime.mjs "$RUNNER_TEMP/bb-plugins-runtime"
+      - name: Install unpatched DSH for native ACP regression
+        run: |
+          node scripts/runtime-toolchain.mjs npm install --prefix "$RUNNER_TEMP/dsh-native" --no-audit --no-fund @deepseek-ai/dsh@0.2.2-rc.1
+          test -x "$RUNNER_TEMP/dsh-native/node_modules/.bin/dsh"
+          echo "DSH_STEERING_TEST_COMMAND=$RUNNER_TEMP/dsh-native/node_modules/.bin/dsh" >> "$GITHUB_ENV"
       - id: install
         run: node scripts/verify.mjs ci
       - run: for script in scripts/*.mjs; do node --check "$script"; done

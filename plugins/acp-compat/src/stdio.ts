@@ -1,3 +1,9 @@
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Duplex } from "node:stream";
+import { steeringSource } from "@hxy91819/dsh-plugins/acp-steering/source";
+import { DshProxy } from "./dsh-proxy.js";
 import { spawn } from "node:child_process";
 import { experimental_readBoundedLines } from "@get-bb/plugin-sdk/provider-bridge";
 import { adapterFor, type AdapterId } from "./adapters/index.js";
@@ -9,15 +15,45 @@ export function runStdio(
   command: string,
   args: string[],
 ): void {
-  const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
+  const directory =
+    adapter === "dsh"
+      ? mkdtempSync(join(tmpdir(), "acp-dsh-steering-"))
+      : undefined;
+  if (directory) {
+    const source = join(directory, "steering.mjs");
+    writeFileSync(source, steeringSource, { mode: 0o600 });
+    const overlay = join(directory, "steering.yml");
+    writeFileSync(
+      overlay,
+      JSON.stringify([{ insert: [{ id: "bb-acp-steering", name: source }] }]),
+      { mode: 0o600 },
+    );
+    args = [...args, "--patch", overlay];
+  }
+  const child = spawn(command, args, {
+    env: { ...process.env, ...(directory ? { DSH_ACP_STEERING_FD: "3" } : {}) },
+    stdio: directory
+      ? ["pipe", "pipe", "pipe", "pipe"]
+      : ["pipe", "pipe", "pipe"],
+  });
   const write = (stream: NodeJS.WritableStream, message: Message) =>
     stream.write(JSON.stringify(message) + "\n");
-  const proxy = new AcpProxy(
-    adapterFor(adapter),
-    (m) => write(process.stdout, m),
-    (m) => write(child.stdin, m),
-  );
+  const side = child.stdio[3];
+  const proxy =
+    adapter === "dsh" && side instanceof Duplex
+      ? new DshProxy(
+          (m) => write(process.stdout, m),
+          (m) => write(child.stdin, m),
+          (m) => write(side, m),
+        )
+      : new AcpProxy(
+          adapterFor(adapter),
+          (m) => write(process.stdout, m),
+          (m) => write(child.stdin, m),
+        );
+  let readyTimer: ReturnType<typeof setTimeout> | undefined;
   const stop = () => {
+    clearTimeout(readyTimer);
     proxy.close("ACP compatibility transport stopped");
     child.kill("SIGTERM");
   };
@@ -44,14 +80,39 @@ export function runStdio(
       onClose: input === process.stdin ? stop : undefined,
     });
   }
+  if (proxy instanceof DshProxy && side instanceof Duplex) {
+    readyTimer = setTimeout(() => {
+      proxy.close("DSH steering plugin did not initialize its private channel");
+      stop();
+    }, 10000);
+    experimental_readBoundedLines({
+      input: side,
+      onLine(line) {
+        try {
+          const message = messageSchema.parse(JSON.parse(line));
+          if (message.method === "ready") clearTimeout(readyTimer);
+          proxy.fromSide(message);
+        } catch {
+          stop();
+        }
+      },
+      onClose: stop,
+      onOverflow: stop,
+    });
+    side.on("error", stop);
+  }
   child.stderr.pipe(process.stderr);
   child.stdin.on("error", stop);
   child.on("error", (error) => {
+    clearTimeout(readyTimer);
     proxy.close(error.message);
+    if (directory) rmSync(directory, { recursive: true, force: true });
     process.exitCode = 1;
   });
   child.on("close", (code) => {
+    clearTimeout(readyTimer);
     proxy.close();
+    if (directory) rmSync(directory, { recursive: true, force: true });
     process.exitCode = code ?? 1;
     process.stdin.destroy();
   });

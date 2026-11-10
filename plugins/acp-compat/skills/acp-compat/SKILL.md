@@ -9,7 +9,7 @@ triggers: [user]
 
 Discover the execution host with `bb machine list --json`, then use
 `bb acp-compat launch --help` for the launch helper. Supply the original agent's
-ACP launch JSON and select `codebuddy` or `passthrough`. The returned command
+ACP launch JSON and select an adapter from the live help. The returned command
 executes on that host and uses its persistent plugin runner.
 
 The helper prepares the runner and returns launch fields; it does not update
@@ -23,3 +23,8 @@ health and models, same-run injection receipts, Stop and a subsequent normal
 prompt. Acceptance of a native steer request alone is insufficient evidence
 that the model received it. Keep credentials and live transcripts out of source
 control.
+
+For DeepSeek Harness, select `dsh` with the original `dsh --profile acp` launch.
+Keep the existing `acp-dsh` native Auto review and model options. The adapter
+mounts the companion steering plugin itself; do not add it again to the profile.
+See the plugin README for supported content, idle delivery and native tests.
