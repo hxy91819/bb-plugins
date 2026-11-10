@@ -2,7 +2,7 @@
 
 # BB ACP Profile Icons
 
-A **BB-specific frontend plugin** that displays recognizable icons for ACP providers.
+A **BB-specific frontend plugin** that displays recognizable icons for ACP providers and compact, color-coded provider profiles in the model picker.
 
 | Provider ID | Icon |
 | --- | --- |
@@ -16,6 +16,12 @@ A **BB-specific frontend plugin** that displays recognizable icons for ACP provi
 | `acp-dsh` | DeepSeek whale mark |
 
 Amp and Devin use BB’s theme foreground for their tiles and theme background for their marks, reversing their visual contrast across light and dark themes. Other ordinary marks inherit BB's foreground color; ACP Codex uses a gray tile with a white mark.
+
+## Compact model picker profiles
+
+The model picker's provider tabs show icons instead of full profile names. Profiles sharing a provider logo or glyph receive distinct colors; a single profile keeps its normal icon color. Colors are derived from provider IDs and the full provider catalog, so changing tab order, closing the menu or changing the available host does not reassign them. Light and dark themes use separate lightness values. Hover a tab to read its complete name; accessible labels and the original selection behavior remain available.
+
+This enhancement uses the public provider directory, app overlay and content-script APIs. It changes presentation only and restores the original tabs when the plugin is disabled or reloaded. It recognizes the current BB model picker's titled provider-button row; a future BB markup change may require updating `compact-tabs.ts`. It leaves unrecognized controls unchanged. The plugin does not rename providers or change the provider names returned by the CLI.
 
 ## Install
 
@@ -47,7 +53,7 @@ bb plugin disable acp-profile-icons
 
 ## How it works
 
-`app.tsx` registers inline SVG components with `app.slots.experimental_providerIcon` and `providerKind: "agent"`. The SVGs are bundled locally; Amp and Devin use theme-aware contrasting colors and ACP Codex uses a gray-and-white tile; other marks inherit BB's text color. The backend entry is empty; this plugin does not change authentication, models, or agent execution.
+`app.tsx` registers inline SVG components with `app.slots.experimental_providerIcon` and `providerKind: "agent"`. The SVGs are bundled locally; Amp and Devin use theme-aware contrasting colors and ACP Codex uses a gray-and-white tile; other marks inherit BB's text color. The compact-tab content script decorates existing provider buttons without replacing their elements or event handlers. A nonvisual app overlay supplies the SDK provider catalog. Color assignments are cached until that catalog changes. Initial discovery scans the document once; later discovery examines added element subtrees, and title/class observation is limited to provider-tab rows. Streaming text and class changes elsewhere do not rescan or repaint those rows. The backend entry is empty; this plugin does not change authentication, models, or agent execution.
 
 For BB 0.42's Provider Usage panel, a scoped content stylesheet supplies SVG masks (or a theme-colored tile and mark mask for Amp and Devin, or a two-color SVG image for ACP Codex). It leaves React-owned elements intact and removes the stylesheet on disable or reload. Newer BB versions may no longer need that selector; the model picker uses the provider-icon extension directly.
 
@@ -110,6 +116,15 @@ Check all of the following before delivery:
 - The Provider Usage fallback matches the picker if its CSS path changed. If that provider has no visible Usage entry, report that limit and check the fallback styling separately.
 
 Compilation and DOM checks support verification; a screenshot that has not been opened and inspected does not establish visual quality.
+
+For regression checks, install the browser engines once and run the Chromium/WebKit behavior tests:
+
+```sh
+npx playwright install --with-deps chromium webkit
+npm test
+```
+
+The tests cover compact widths, separate profile colors, theme switching, click selection, menu recreation, catalog changes and cleanup.
 
 ## Develop
 

@@ -1,9 +1,9 @@
 {
   "name": "bb-plugin-acp-profile-icons",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "type": "module",
   "private": true,
-  "description": "Brand icons for ACP providers in BB.",
+  "description": "Brand icons and compact, color-coded provider profiles for BB.",
   "license": "MIT",
   "author": "hxy91819",
   "repository": {
@@ -21,7 +21,7 @@
   },
   "bb": {
     "name": "ACP Profile Icons",
-    "description": "Brand icons for ACP providers in BB model pickers and provider controls.",
+    "description": "Brand icons and compact, color-coded provider profiles for BB.",
     "branding": {
       "icon": "Palette"
     },
@@ -31,11 +31,12 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "bb plugin build ."
+    "build": "bb plugin build .",
+    "test": "node --test compact-tabs.test.mjs"
   },
-  "dependencies": {},
   "devDependencies": {
     "@get-bb/plugin-sdk": "https://github.com/hxy91819/bb/releases/download/fork-v0.46.0-20261016.6/bb-plugin-sdk-fork-v0.46.0-20261016.6.tgz",
+    "@playwright/test": "1.58.2",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
