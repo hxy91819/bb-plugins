@@ -75,7 +75,7 @@
   },
   "dependencies": {
     "@get-bb/plugin-sdk": "https://github.com/hxy91819/bb/releases/download/fork-v0.46.0-20261016.6/bb-plugin-sdk-fork-v0.46.0-20261016.6.tgz",
-    "@hxy91819/dsh-plugins": "https://codeload.github.com/hxy91819/dsh-plugins/tar.gz/9eb3a6e41e59b382aea5cf8a6f5e207e9aa09f2b",
+    "@hxy91819/dsh-plugins": "https://codeload.github.com/hxy91819/dsh-plugins/tar.gz/6fc5a71651a2f79cf2ba209f30009b0bdb225ceb",
     "smol-toml": "^1.7.1",
     "yaml": "^2.9.0",
     "zod": "^4.3.6"
