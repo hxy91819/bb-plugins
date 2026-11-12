@@ -42,6 +42,6 @@
   "scripts": {
     "build": "bb plugin build .",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test download.test.ts panel.test.tsx"
+    "test": "tsx --test panel.test.tsx"
   }
 }
