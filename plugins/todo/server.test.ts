@@ -462,7 +462,9 @@ test("panel RPC creates, updates, completes, reopens, and removes a todo", async
 
 test("package imports only public SDK surfaces", async () => {
   const result = await experimental_scanPublicSdkOnly(process.cwd(), {
-    allow: [/^react$/, /^zod$/],
+    // Frontend test-only tooling; production code keeps the server surface free
+    // of these imports.
+    allow: [/^react$/, /^zod$/, /^jsdom$/, /^@testing-library\/react$/],
   });
   assert.deepEqual(result.violations, []);
   assert.deepEqual(result.privateDependencies, []);

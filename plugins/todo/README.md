@@ -1,9 +1,10 @@
 # Todo (`bb-plugin-todo`)
 
-Lightweight Apple-style macro todos for BB. Phase 1 ships the shared contract,
-SQLite storage, panel RPC, the `bb todo` CLI, and the built-in agent skill. The
-Apple Reminders-style panel is a phase 2 deliverable; `app.tsx` is a compilable
-placeholder that shows live counts.
+Lightweight Apple-style macro todos for BB. The plugin ships the shared
+contract, SQLite storage, panel RPC, the `bb todo` CLI, the built-in agent skill,
+and an Apple Reminders-style single-column panel. The panel is intentionally
+small: a one-line add bar, quiet focus/later/waiting lists, an inbox triage strip
+for agent proposals, inline row details, and a collapsed completed drawer.
 
 ## Model
 
@@ -50,6 +51,34 @@ the latest log, linked threads, `hasRunningThread`, and `actionable`
 `propose` and leave the inbox only through `triage`; `update` and `done` reject
 inbox items.
 
+## Panel
+
+`app.tsx` registers the `todo` navigation panel at `/plugins/todo/todo`. The
+host owns the title bar; the panel body starts with the add bar and never
+repeats the page title.
+
+- **Quick add**: type a title, press Enter (or the `+` button), and the todo is
+  created in the selected `Focus` / `Later` / `Waiting` pill. Enter during an
+  IME composition is ignored.
+- **Inbox**: proposals only appear when the inbox is non-empty. Each proposal
+  shows its title, proposal reason, linked thread capsules, and accept
+  (including a bucket selector), merge into an open formal todo, or dismiss.
+- **Rows**: the round checkbox completes a todo; the row expands inline to edit
+  title, bucket, next step, and notes, with `⌘/Ctrl + Enter` or the Save button.
+  Expanded rows also show agent progress logs and a delete button. Thread
+  capsules (running ones carry a dot) and log thread ids navigate to the linked
+  BB thread.
+- **Completed**: the bottom `已完成 (N)` drawer starts collapsed and restores a
+  todo when its filled checkbox is clicked. The snapshot carries the 20 most
+  recent completed items.
+- **Badge**: the navigation badge prefers `inbox` proposals (`warning`), then
+  `focus` items (`neutral`). It refreshes on `todo:changed` and falls back to
+  no badge if the snapshot cannot be loaded.
+
+SDK 0.6.75 does not export `experimental_threadContextCardRow` or
+`experimental_ThreadContextCardRow`; the optional read-only thread context row
+is therefore not registered. Revisit when the host SDK exposes that slot.
+
 ## Panel RPC and realtime
 
 `contract.ts` is the single authority for types, RPC names, and the realtime
@@ -77,5 +106,8 @@ npm run build
 bb plugin types --check
 ```
 
-Tests use `createFakePluginHost`, whose isolated temp-dir database is removed by
-`harness.lifecycle.dispose()`; no fixture database is written into the repo.
+`server.test.ts` uses `createFakePluginHost`, whose isolated temp-dir database
+is removed by `harness.lifecycle.dispose()`; no fixture database is written into
+the repo. `app.test.ts` uses JSDOM with `@get-bb/plugin-sdk/testing/app`
+(`loadPluginApp` + `renderSlot`) and `@testing-library/react` to exercise quick
+add, completion, inbox triage, thread navigation, inline edits, and the badge.
