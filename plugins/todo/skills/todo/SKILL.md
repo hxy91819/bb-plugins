@@ -17,22 +17,25 @@ Add `--json` for machine-readable output. Buckets are `focus`, `later`,
 
 1. **Bind the session automatically.** When the conversation starts advancing
    an existing todo, run `bb todo list --json` to match it, then
-   `bb todo link <id>` and `bb todo log <id> "<what happened>" --next-step "<next action>"`.
+   `bb todo link <id>` and `bb todo log <id> "<what happened>"`.
    Inside a BB thread this binds the current session without any flag; never
    ask the user to link manually. `bb todo log` also binds the current thread
    unless `--no-link` is passed. Linking again with an empty note does not
    clear a note that is already stored.
 
-2. **One todo is one closable deliverable.** Each todo is a concrete
-   deliverable or problem that one session can finish and accept: one
-   checkable result. Do not split that into trivia such as "send one message"
-   or "change one config line", and do not pack unrelated tasks into a
-   grab-bag such as "day-to-day for project X". Tight substeps of the same
-   deliverable go in that todo's `notes`, not in new todos.
+2. **One todo is one closable deliverable; its title is the action.** Each todo
+   is a concrete deliverable or problem that one session can finish and accept:
+   one checkable result. Do not split that into trivia such as "send one
+   message" or "change one config line", and do not pack unrelated tasks into a
+   grab-bag such as "day-to-day for project X". The title itself must read as
+   the executable item. Put background, context, links, and acceptance criteria
+   in that todo's `notes` (`--notes`), not in a separate next-step field and not
+   in new todos.
    Before extracting todos from meeting notes, chat logs, or a messy request,
    run `bb todo list --status all --json` and check existing items, including
    inbox proposals. If the detail belongs to an existing todo, fold it in with
-   `bb todo log <id> "..." --next-step "..."`; never create a new todo for it.
+   `bb todo update <id> --notes "<full notes>"` or
+   `bb todo log <id> "<progress>"`; never create a new todo for it.
    Only propose a genuinely independent deliverable at that grain, and only
    through
    `bb todo propose "<title>" --reason "<source excerpt and why it is independent>"`.
@@ -58,11 +61,13 @@ Add `--json` for machine-readable output. Buckets are `focus`, `later`,
 ## Start a session
 
 `bb todo start <id> [--project <projectId>] [--prompt "<extra>"]` spawns a new
-thread and links it to the todo in the same step. The prompt names the todo,
-its next step, a short note, and up to five linked `@thread:` lines (active
-threads first, then the most recently linked). Project resolution is
-`--project`, then the newest linked thread that still has a project, then the
-current bb project. Pass `--project` when all three are missing.
+thread and links it to the todo in the same step. The prompt names the todo
+title, its list/section, a short note, and up to five linked `@thread:` lines
+(active threads first, then the most recently linked). There is no separate
+next-step paragraph: the title is the action and the notes carry the context.
+Project resolution is `--project`, then the newest linked thread that still has
+a project, then the current bb project. Pass `--project` when all three are
+missing.
 
 The panel button「新会话」only prefills the composer. A session opened that way
 does not exist until the user sends, so its prompt tells the new agent to run
@@ -73,20 +78,24 @@ thread; do not treat a missing link as an error if `bb todo show <id>` lists it.
 
 - `bb todo list [--status open|inbox|done|all] [--bucket focus|later|waiting|inbox] [--list <name>] [--section <name>] [--search <query>] [--json]`
 - `bb todo show <id> [--json]`
-- `bb todo add <title> [--bucket focus|later|waiting] [--list <name>] [--section <name>] [--notes <text>] [--next-step <text>] [--link-current] [--json]`
-- `bb todo propose <title> --reason <text> [--list <name>] [--section <name>] [--notes <text>] [--next-step <text>] [--link-current] [--json]`
+- `bb todo add <title> [--bucket focus|later|waiting] [--list <name>] [--section <name>] [--notes <text>] [--link-current] [--json]`
+- `bb todo propose <title> --reason <text> [--list <name>] [--section <name>] [--notes <text>] [--link-current] [--json]`
 - `bb todo triage <id> --action accept|merge|dismiss [--bucket focus|later|waiting] [--into <target-id>] [--list <name>] [--section <name>] [--json]`
-- `bb todo log <id> <text> [--next-step <text>] [--no-link] [--json]`
+- `bb todo log <id> <text> [--no-link] [--json]`
 - `bb todo link <id> [--thread <threadId>] [--note <text>] [--json]`
 - `bb todo unlink <id> [--thread <threadId>] [--json]`
 - `bb todo start <id> [--project <projectId>] [--prompt <extra>] [--json]`
 - `bb todo done <id> [--note <text>] [--json]` / `bb todo reopen <id> [--json]`
-- `bb todo update <id> [--title <text>] [--bucket focus|later|waiting] [--list <name>] [--section <name>] [--notes <text>] [--next-step <text>] [--json]`
+- `bb todo update <id> [--title <text>] [--bucket focus|later|waiting] [--list <name>] [--section <name>] [--notes <text>] [--json]`
 - `bb todo color <list> <blue|orange|green|purple|rose|teal|amber|indigo> [--json]`
 - `bb todo rm <id> [--json]`
 - `bb todo scan [--list <name>] [--section <name>] [--json]`
 - `bb todo history [--limit <n>] [--json]`
 - `bb todo undo [rev] [--json]`
+
+`--next-step` is retired from the model but still accepted by `add`, `propose`,
+`update`, and `log` for older scripts; the text is appended to `notes` instead
+of failing. New work should always use `--notes` or put the detail in the title.
 
 ## Lists, sections, and undo
 

@@ -57,7 +57,17 @@ async function runJsonError(
   return JSON.parse(result.stdout ?? "null");
 }
 
-test("quick add keeps short ids stable across reloads and normalizes t-1 and 1", async () => {
+async function runText(
+  harness: FakePluginHarness,
+  argv: string[],
+  ctx?: { threadId?: string },
+): Promise<string> {
+  const result = await harness.behavior.runCli(argv, ctx);
+  assert.equal(result.exitCode, 0, result.stderr);
+  return result.stdout ?? "";
+}
+
+test("quick add keeps short ids stable across reloads and folds legacy --next-step into notes", async () => {
   let { bb, harness } = fixture();
   try {
     await plugin(bb);
@@ -81,7 +91,8 @@ test("quick add keeps short ids stable across reloads and normalizes t-1 and 1",
     assert.equal(first.bucket, "focus");
     assert.equal(second.id, "T-2");
     assert.equal(third.id, "T-3");
-    assert.equal(third.nextStep, "Ping the reviewer");
+    assert.equal(third.notes, "Ping the reviewer");
+    assert.equal(Object.hasOwn(third, "nextStep"), false);
     assert.ok(Number.isNaN(Date.parse(first.createdAt)) === false);
 
     const lower = (await runJson(harness, ["show", "t-1"])) as TodoItem;
@@ -102,6 +113,101 @@ test("quick add keeps short ids stable across reloads and normalizes t-1 and 1",
       ["T-1", "T-2", "T-3"],
     );
     assert.equal(listed.count, 3);
+  } finally {
+    await harness.lifecycle.dispose();
+  }
+});
+
+test("CLI text output stays clean and legacy --next-step merges into notes on update and propose", async () => {
+  const { bb, harness } = fixture();
+  try {
+    await plugin(bb);
+    const item = (await runJson(harness, [
+      "add",
+      "Ship the plugin",
+      "--list",
+      "LightSpace",
+      "--section",
+      "Hosting Station",
+    ])) as TodoItem;
+    const listText = await runText(harness, ["list"]);
+    assert.match(
+      listText,
+      /^T-1  focus  \[LightSpace\/Hosting Station\]  Ship the plugin$/m,
+    );
+    assert.equal(listText.includes("next:"), false);
+
+    const proposal = (await runJson(harness, [
+      "propose",
+      "Review the README",
+      "--reason",
+      "Docs are a separate deliverable",
+      "--next-step",
+      "Check typos",
+    ])) as TodoItem;
+    assert.equal(proposal.notes, "Check typos");
+
+    const updated = (await runJson(harness, [
+      "update",
+      item.id,
+      "--next-step",
+      "Add acceptance notes",
+    ])) as TodoItem;
+    assert.equal(updated.notes, "Add acceptance notes");
+    assert.equal(Object.hasOwn(updated, "nextStep"), false);
+
+    const scanText = await runText(harness, ["scan"]);
+    assert.match(
+      scanText,
+      /^T-1  focus  \[LightSpace\/Hosting Station\]  Ship the plugin  \[actionable\]$/m,
+    );
+    assert.equal(/next:/.test(scanText), false);
+  } finally {
+    await harness.lifecycle.dispose();
+  }
+});
+
+test("startup folds legacy next_step into notes and clears it idempotently", async () => {
+  let { bb, harness } = fixture();
+  try {
+    await plugin(bb);
+    const item = (await runJson(harness, ["add", "Legacy todo"])) as TodoItem;
+    let db = bb.storage.database();
+    db.prepare("UPDATE todo_items SET notes = ?, next_step = ? WHERE seq = ?").run(
+      "Existing context",
+      "Old action",
+      item.seq,
+    );
+
+    ({ bb, harness } = await harness.lifecycle.reload(plugin));
+    const migrated = (await runJson(harness, ["show", item.id])) as TodoItem;
+    assert.equal(migrated.notes, "Existing context\n\nOld action");
+    assert.equal(Object.hasOwn(migrated, "nextStep"), false);
+    db = bb.storage.database();
+    let row = db
+      .prepare("SELECT notes, next_step FROM todo_items WHERE seq = ?")
+      .get(item.seq) as { notes: string; next_step: string };
+    assert.equal(row.next_step, "");
+
+    // A note that already contains the old text is not duplicated.
+    db.prepare("UPDATE todo_items SET notes = ?, next_step = ? WHERE seq = ?").run(
+      "Existing context\n\nOld action",
+      "Old action",
+      item.seq,
+    );
+    ({ bb, harness } = await harness.lifecycle.reload(plugin));
+    const unchanged = (await runJson(harness, ["show", item.id])) as TodoItem;
+    assert.equal(unchanged.notes, "Existing context\n\nOld action");
+    db = bb.storage.database();
+    row = db
+      .prepare("SELECT notes, next_step FROM todo_items WHERE seq = ?")
+      .get(item.seq) as { notes: string; next_step: string };
+    assert.equal(row.next_step, "");
+
+    // Later starts are a no-op once the legacy column is empty.
+    ({ bb, harness } = await harness.lifecycle.reload(plugin));
+    const stable = (await runJson(harness, ["show", item.id])) as TodoItem;
+    assert.equal(stable.notes, "Existing context\n\nOld action");
   } finally {
     await harness.lifecycle.dispose();
   }
@@ -271,7 +377,8 @@ test("log binds ctx.threadId idempotently and --no-link records without binding"
     )) as TodoItem;
     assert.equal(first.logs[0].text, "Talked to design");
     assert.equal(first.logs[0].threadId, "thr-current");
-    assert.equal(first.nextStep, "Send the invite");
+    assert.equal(first.notes, "Send the invite");
+    assert.equal(Object.hasOwn(first, "nextStep"), false);
     assert.equal(first.threads.filter((thread) => thread.threadId === "thr-current").length, 1);
 
     const second = (await runJson(
@@ -282,6 +389,7 @@ test("log binds ctx.threadId idempotently and --no-link records without binding"
     assert.equal(second.threads.filter((thread) => thread.threadId === "thr-current").length, 1);
     assert.equal(second.logs.length, 2);
     assert.equal(second.logs[0].text, "Picked a meeting time");
+    assert.equal(second.notes, "Send the invite");
 
     const unlinked = (await runJson(
       harness,
@@ -352,7 +460,7 @@ test("scan marks running-thread and waiting todos as not actionable", async () =
     assert.equal(byId.get(beta.id)?.hasRunningThread, false);
     assert.equal(byId.get(beta.id)?.actionable, true);
     assert.equal(byId.get(beta.id)?.latestLog?.text, "Beta progress");
-    assert.equal(byId.get(beta.id)?.nextStep, "Beta next");
+    assert.equal(Object.hasOwn(byId.get(beta.id) ?? {}, "nextStep"), false);
     assert.equal(byId.get(gamma.id)?.hasRunningThread, false);
     assert.equal(byId.get(gamma.id)?.actionable, false);
     assert.equal(byId.get(gamma.id)?.threads[0].threadId, "thr-gone");
@@ -426,11 +534,11 @@ test("panel RPC creates, updates, completes, reopens, and removes a todo", async
       id: created.id,
       title: "Panel todo v2",
       bucket: "later",
-      nextStep: "Review the panel",
+      notes: "Review the panel",
     })) as TodoItem;
     assert.equal(updated.title, "Panel todo v2");
     assert.equal(updated.bucket, "later");
-    assert.equal(updated.nextStep, "Review the panel");
+    assert.equal(updated.notes, "Review the panel");
 
     const completed = (await harness.behavior.callRpc("setCompleted", {
       id: created.id,
@@ -464,7 +572,7 @@ test("panel RPC creates, updates, completes, reopens, and removes a todo", async
   }
 });
 
-test("merge keeps source logs and next step, and does not clobber thread notes", async () => {
+test("merge keeps source logs and notes, and does not clobber thread notes", async () => {
   const { bb, harness } = fixture();
   try {
     await plugin(bb);
@@ -484,6 +592,7 @@ test("merge keeps source logs and next step, and does not clobber thread notes",
       "--next-step",
       "Ship the patch",
     ])) as TodoItem;
+    assert.equal(proposal.notes, "typos\n\nShip the patch");
     const logged = (await runJson(
       harness,
       ["log", proposal.id, "source progress"],
@@ -504,14 +613,17 @@ test("merge keeps source logs and next step, and does not clobber thread notes",
       target.id,
     ])) as { action: string; item: TodoItem };
     assert.equal(merged.action, "merge");
-    assert.equal(merged.item.nextStep, "Ship the patch");
+    assert.equal(merged.item.notes, "");
+    assert.equal(Object.hasOwn(merged.item, "nextStep"), false);
     const kept = merged.item.logs.find((entry) => entry.text === "source progress");
     assert.ok(kept);
     assert.equal(kept.createdAt, sourceLog.createdAt);
     assert.equal(kept.threadId, "thr-source");
     assert.equal(kept.id, sourceLog.id);
     assert.match(merged.item.logs[0].text, /Merged inbox proposal: Review the README/);
-    assert.match(merged.item.logs[0].text, /Next step: Ship the patch/);
+    assert.match(merged.item.logs[0].text, /Notes: typos/);
+    assert.match(merged.item.logs[0].text, /Ship the patch/);
+    assert.equal(/Next step:/.test(merged.item.logs[0].text), false);
     assert.ok(merged.item.logs.some((entry) => entry.text === "target kept"));
     const noteOf = (threadId: string) =>
       merged.item.threads.find((thread) => thread.threadId === threadId)?.note;
@@ -536,8 +648,9 @@ test("merge keeps source logs and next step, and does not clobber thread notes",
       "--into",
       target.id,
     ])) as { item: TodoItem };
-    assert.equal(second.item.nextStep, "Ship the patch");
-    assert.match(second.item.logs[0].text, /Next step: Do not replace/);
+    assert.equal(second.item.notes, "");
+    assert.match(second.item.logs[0].text, /Notes: Do not replace/);
+    assert.equal(/Next step:/.test(second.item.logs[0].text), false);
 
     await harness.behavior.callRpc("linkThread", {
       id: target.id,
@@ -609,7 +722,17 @@ test("prepareStartSession quotes linked threads and a project without failing cl
   const pause = () => new Promise((resolve) => setTimeout(resolve, 15));
   try {
     await plugin(bb);
-    const linked = (await runJson(harness, ["add", "Ship the linked todo", "--next-step", "Write tests"])) as TodoItem;
+    const linked = (await runJson(harness, [
+      "add",
+      "Ship the linked todo",
+      "--list",
+      "LightSpace",
+      "--section",
+      "Hosting Station",
+      "--next-step",
+      "Write tests",
+    ])) as TodoItem;
+    assert.equal(linked.notes, "Write tests");
     await runJson(harness, ["link", linked.id, "--thread", "thr-active", "--note", "running"]);
     await pause();
     await runJson(harness, ["link", linked.id, "--thread", "thr-mid"]);
@@ -631,7 +754,9 @@ test("prepareStartSession quotes linked threads and a project without failing cl
     assert.equal(prepared.environmentId, "env-new");
     assert.ok(prepared.initialPrompt.length <= 3000);
     assert.match(prepared.initialPrompt, new RegExp(`推进待办 ${linked.id}：Ship the linked todo`));
-    assert.match(prepared.initialPrompt, /下一步：Write tests/);
+    assert.match(prepared.initialPrompt, /清单：LightSpace \/ Hosting Station/);
+    assert.match(prepared.initialPrompt, /备注：\nWrite tests/);
+    assert.equal(/下一步：/.test(prepared.initialPrompt), false);
     assert.match(prepared.initialPrompt, /bb todo link/);
     assert.match(prepared.initialPrompt, /bb todo log/);
     const quoted = [...prepared.initialPrompt.matchAll(/^@thread:(\S+)$/gm)].map((match) => match[1]);
@@ -672,6 +797,7 @@ test("prepareStartSession quotes linked threads and a project without failing cl
       "--next-step",
       "Summarize the note",
     ])) as TodoItem;
+    assert.match(plain.notes, /^注{900}\n\nSummarize the note$/);
     const bare = (await harness.behavior.callRpc("prepareStartSession", { id: plain.id })) as {
       projectId: string | null;
       environmentId: string | null;
@@ -683,7 +809,7 @@ test("prepareStartSession quotes linked threads and a project without failing cl
     assert.equal(bare.environmentId, null);
     assert.equal(/@thread:/.test(bare.initialPrompt), false);
     assert.match(bare.initialPrompt, /推进待办/);
-    assert.match(bare.initialPrompt, /下一步：Summarize the note/);
+    assert.equal(/下一步：/.test(bare.initialPrompt), false);
     assert.match(bare.initialPrompt, new RegExp(`bb todo show ${plain.id}`));
     assert.equal(bare.initialPrompt.includes("注".repeat(900)), false);
     assert.ok(bare.initialPrompt.length <= 3000);
@@ -756,6 +882,7 @@ test("bb todo start spawns a thread and links it back", async () => {
       "--next-step",
       "Open the tests",
     ])) as TodoItem;
+    assert.equal(linked.notes, "Open the tests");
     await runJson(harness, ["link", linked.id, "--thread", "thr-related", "--note", "prior"]);
     const started = (await runJson(harness, [
       "start",
@@ -773,6 +900,8 @@ test("bb todo start spawns a thread and links it back", async () => {
     assert.equal(spawned[1].environment.type, "project-default");
     assert.match(spawned[1].prompt, /@thread:thr-related/);
     assert.match(spawned[1].prompt, /最近在改测试/);
+    assert.match(spawned[1].prompt, /Open the tests/);
+    assert.equal(/下一步：/.test(spawned[1].prompt), false);
     assert.match(spawned[1].prompt, /额外：先看失败的测试$/);
     assert.equal(started.initialPrompt, spawned[1].prompt);
     assert.ok(started.item.threads.some((thread) => thread.threadId === "thr-spawned-2"));
@@ -891,6 +1020,7 @@ test("lists take distinct palette colors, titles can carry #List/Section, and un
     assert.equal(accepted.item.sectionName, "生产与上架");
 
     const linked = (await runJson(harness, ["add", "可恢复的待办", "--next-step", "保留下一步"])) as TodoItem;
+    assert.equal(linked.notes, "保留下一步");
     await runJson(harness, ["link", linked.id, "--thread", "thr-keep", "--note", "keep me"], {
       threadId: "thr_actor",
     });
@@ -909,7 +1039,8 @@ test("lists take distinct palette colors, titles can carry #List/Section, and un
     assert.match(undoneDelete.revision.summary, new RegExp(`撤销 #${undoneDelete.undoneRev}`));
     const restored = (await runJson(harness, ["show", linked.id])) as TodoItem;
     assert.equal(restored.deletedAt, null);
-    assert.equal(restored.nextStep, "保留下一步");
+    assert.equal(restored.notes, "保留下一步");
+    assert.equal(Object.hasOwn(restored, "nextStep"), false);
     assert.equal(restored.logs.some((log) => log.text === "留下的日志"), true);
     assert.equal(restored.threads.find((thread) => thread.threadId === "thr-keep")?.note, "keep me");
 
@@ -924,6 +1055,7 @@ test("lists take distinct palette colors, titles can carry #List/Section, and un
     assert.equal(reopened.logs.some((log) => log.text === "留下的日志"), true);
 
     const target = (await runJson(harness, ["add", "合并目标", "--next-step", "keep target"])) as TodoItem;
+    assert.equal(target.notes, "keep target");
     await runJson(harness, ["log", target.id, "target log", "--no-link"]);
     await runJson(harness, ["link", target.id, "--thread", "thr-target", "--note", "target note"]);
     const source = (await runJson(harness, [
@@ -944,10 +1076,11 @@ test("lists take distinct palette colors, titles can carry #List/Section, and un
     const sourceBack = (await runJson(harness, ["show", source.id])) as TodoItem;
     const targetBack = (await runJson(harness, ["show", target.id])) as TodoItem;
     assert.equal(sourceBack.bucket, "inbox");
-    assert.equal(sourceBack.notes, "source notes");
+    assert.equal(sourceBack.notes, "source notes\n\nsource next");
     assert.equal(sourceBack.logs.some((log) => log.text === "source log"), true);
     assert.equal(sourceBack.threads.find((thread) => thread.threadId === "thr-source")?.note, "source note");
-    assert.equal(targetBack.nextStep, "keep target");
+    assert.equal(targetBack.notes, "keep target");
+    assert.equal(Object.hasOwn(targetBack, "nextStep"), false);
     assert.equal(targetBack.logs.some((log) => log.text === "target log"), true);
     assert.equal(targetBack.logs.some((log) => /Merged inbox proposal/.test(log.text)), false);
     assert.equal(targetBack.logs.some((log) => log.text === "source log"), false);

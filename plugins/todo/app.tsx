@@ -59,7 +59,7 @@ const quietButtonClassName =
 const primaryButtonClassName =
   "touch-manipulation cursor-pointer rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50";
 const iconButtonClassName =
-  "touch-manipulation flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50";
+  "touch-manipulation flex h-7 w-7 shrink-0 cursor-pointer appearance-none items-center justify-center rounded-md border-0 bg-transparent text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50";
 
 const timeFormatter = new Intl.DateTimeFormat("zh-CN", {
   month: "numeric",
@@ -211,7 +211,7 @@ function ThreadCountBadge({
         if (single) navigate.toThread(single.threadId);
         else onShowThreads();
       }}
-      className="inline-flex h-6 touch-manipulation shrink-0 cursor-pointer items-center gap-1 rounded-full border border-border bg-background px-2 text-[11px] tabular-nums text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="inline-flex h-6 touch-manipulation shrink-0 cursor-pointer appearance-none items-center gap-1 rounded-full border-0 bg-muted/70 px-1.5 text-[11px] tabular-nums text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <span
         aria-hidden="true"
@@ -221,43 +221,6 @@ function ThreadCountBadge({
       />
       <span>{item.threads.length}</span>
     </button>
-  );
-}
-
-function BucketPills({
-  value,
-  onChange,
-  label = "添加到分组",
-}: {
-  value: TodoFormalBucket;
-  onChange(bucket: TodoFormalBucket): void;
-  label?: string;
-}) {
-  return (
-    <div
-      role="group"
-      aria-label={label}
-      className="flex shrink-0 items-center gap-0.5 rounded-full bg-muted p-0.5"
-    >
-      {FORMAL_BUCKETS.map((bucket) => {
-        const active = bucket === value;
-        return (
-          <button
-            key={bucket}
-            type="button"
-            aria-pressed={active}
-            onClick={() => onChange(bucket)}
-            className={`touch-manipulation cursor-pointer rounded-full px-2 py-0.5 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-              active
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            {BUCKET_LABEL[bucket]}
-          </button>
-        );
-      })}
-    </div>
   );
 }
 
@@ -297,15 +260,15 @@ function QuickAdd({
   };
 
   return (
-    <div className="rounded-2xl border border-border bg-card p-2 shadow-sm transition-shadow focus-within:border-primary/40 focus-within:shadow-md focus-within:ring-2 focus-within:ring-ring">
-      <div className="flex flex-wrap items-center gap-2">
+    <div className="rounded-2xl border border-border bg-card px-2 py-1.5 shadow-sm transition-shadow focus-within:border-primary/40 focus-within:shadow-md focus-within:ring-2 focus-within:ring-ring">
+      <div className="flex flex-nowrap items-center gap-1.5">
         <button
           type="button"
           aria-label="添加待办"
           title="添加待办"
           disabled={adding || title.trim().length === 0}
           onClick={() => void submit()}
-          className="flex h-8 w-8 shrink-0 touch-manipulation cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-40"
+          className="flex h-7 w-7 shrink-0 touch-manipulation cursor-pointer appearance-none items-center justify-center rounded-full border-0 bg-transparent text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-40"
         >
           <PlusIcon />
         </button>
@@ -327,10 +290,24 @@ function QuickAdd({
             event.preventDefault();
             void submit();
           }}
-          className="min-w-0 flex-1 bg-transparent py-1 text-base text-foreground placeholder:text-muted-foreground focus:outline-none sm:text-sm"
+          className="min-w-0 flex-1 border-0 bg-transparent py-1 text-base text-foreground outline-none placeholder:text-muted-foreground sm:text-sm"
         />
-        <div className="basis-full sm:basis-auto">
-          <BucketPills value={bucket} onChange={setBucket} />
+        <div className="relative shrink-0">
+          <select
+            aria-label="添加到分组"
+            value={bucket}
+            onChange={(event) => setBucket(event.target.value as TodoFormalBucket)}
+            className="h-7 touch-manipulation cursor-pointer appearance-none rounded-full border-0 bg-muted pl-2.5 pr-5 text-base text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-xs"
+          >
+            {FORMAL_BUCKETS.map((value) => (
+              <option key={value} value={value}>
+                {BUCKET_LABEL[value]}
+              </option>
+            ))}
+          </select>
+          <span className="pointer-events-none absolute top-1/2 right-1.5 -translate-y-1/2 text-muted-foreground">
+            <ChevronIcon open={false} />
+          </span>
         </div>
       </div>
     </div>
@@ -552,7 +529,7 @@ function StartSessionButton({
       }}
       className={
         variant === "icon"
-          ? iconButtonClassName
+          ? `${iconButtonClassName} opacity-100 sm:opacity-60 sm:group-hover:opacity-100`
           : "inline-flex shrink-0 touch-manipulation cursor-pointer items-center rounded-full border border-border bg-background px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50"
       }
     >
@@ -600,7 +577,6 @@ function TodoDetails({
   const rpc = useRpc<typeof rpcContract>();
   const [title, setTitle] = useState(item.title);
   const [bucket, setBucket] = useState<TodoFormalBucket>(item.bucket as TodoFormalBucket);
-  const [nextStep, setNextStep] = useState(item.nextStep);
   const [notes, setNotes] = useState(item.notes);
   const [listName, setListName] = useState(item.listName);
   const [sectionName, setSectionName] = useState(item.sectionName);
@@ -610,19 +586,17 @@ function TodoDetails({
   const baseline = useRef({
     title: item.title,
     bucket: item.bucket as TodoFormalBucket,
-    nextStep: item.nextStep,
     notes: item.notes,
     listName: item.listName,
     sectionName: item.sectionName,
   });
   const seenId = useRef(item.id);
-  const draftRef = useRef({ title, bucket, nextStep, notes, listName, sectionName });
-  draftRef.current = { title, bucket, nextStep, notes, listName, sectionName };
+  const draftRef = useRef({ title, bucket, notes, listName, sectionName });
+  draftRef.current = { title, bucket, notes, listName, sectionName };
 
   const draftIsDirty = (draft: typeof draftRef.current) =>
     draft.title.trim() !== baseline.current.title ||
     draft.bucket !== baseline.current.bucket ||
-    draft.nextStep !== baseline.current.nextStep ||
     draft.notes !== baseline.current.notes ||
     draft.listName.trim() !== baseline.current.listName ||
     draft.sectionName.trim() !== baseline.current.sectionName;
@@ -631,7 +605,6 @@ function TodoDetails({
     const next = {
       title: item.title,
       bucket: item.bucket as TodoFormalBucket,
-      nextStep: item.nextStep,
       notes: item.notes,
       listName: item.listName,
       sectionName: item.sectionName,
@@ -642,7 +615,6 @@ function TodoDetails({
       baseline.current = next;
       setTitle(next.title);
       setBucket(next.bucket);
-      setNextStep(next.nextStep);
       setNotes(next.notes);
       setListName(next.listName);
       setSectionName(next.sectionName);
@@ -653,7 +625,6 @@ function TodoDetails({
     const changed =
       next.title !== baseline.current.title ||
       next.bucket !== baseline.current.bucket ||
-      next.nextStep !== baseline.current.nextStep ||
       next.notes !== baseline.current.notes ||
       next.listName !== baseline.current.listName ||
       next.sectionName !== baseline.current.sectionName;
@@ -661,14 +632,13 @@ function TodoDetails({
     if (!changed) return;
     setTitle(next.title);
     setBucket(next.bucket);
-    setNextStep(next.nextStep);
     setNotes(next.notes);
     setListName(next.listName);
     setSectionName(next.sectionName);
     setSaved(false);
-  }, [item.id, item.title, item.bucket, item.nextStep, item.notes, item.listName, item.sectionName, item.updatedAt]);
+  }, [item.id, item.title, item.bucket, item.notes, item.listName, item.sectionName, item.updatedAt]);
 
-  const dirty = draftIsDirty({ title, bucket, nextStep, notes, listName, sectionName });
+  const dirty = draftIsDirty({ title, bucket, notes, listName, sectionName });
 
   const save = async () => {
     if (saving) return;
@@ -680,14 +650,12 @@ function TodoDetails({
     const patch: {
       title?: string;
       bucket?: TodoFormalBucket;
-      nextStep?: string;
       notes?: string;
       listName?: string;
       sectionName?: string;
     } = {};
     if (trimmedTitle !== baseline.current.title) patch.title = trimmedTitle;
     if (bucket !== baseline.current.bucket) patch.bucket = bucket;
-    if (nextStep !== baseline.current.nextStep) patch.nextStep = nextStep;
     if (notes !== baseline.current.notes) patch.notes = notes;
     if (listName.trim() !== baseline.current.listName) patch.listName = listName.trim();
     if (sectionName.trim() !== baseline.current.sectionName) patch.sectionName = sectionName.trim();
@@ -698,7 +666,6 @@ function TodoDetails({
       baseline.current = {
         title: trimmedTitle,
         bucket,
-        nextStep,
         notes,
         listName: listName.trim(),
         sectionName: sectionName.trim(),
@@ -739,6 +706,12 @@ function TodoDetails({
         }
       }}
     >
+      <div className="mb-2 flex items-center gap-2 text-[11px] text-muted-foreground">
+        <span className="rounded-full bg-muted px-1.5 py-0.5 font-medium tabular-nums text-foreground">
+          {item.id}
+        </span>
+        <span>详情</span>
+      </div>
       {item.threads.length > 0 ? (
         <div className="mb-3 space-y-1">
           <h3 className="text-[11px] font-medium text-muted-foreground">关联会话</h3>
@@ -772,17 +745,6 @@ function TodoDetails({
           </select>
         </label>
         <label className="space-y-1">
-          <span className="text-[11px] text-muted-foreground">下一步</span>
-          <input
-            aria-label={`下一步 ${item.id}`}
-            value={nextStep}
-            maxLength={2000}
-            placeholder="下一步做什么？"
-            onChange={(event) => setNextStep(event.target.value)}
-            className={fieldClassName}
-          />
-        </label>
-        <label className="space-y-1">
           <span className="text-[11px] text-muted-foreground">项目列表</span>
           <input
             aria-label={`项目列表 ${item.id}`}
@@ -794,8 +756,8 @@ function TodoDetails({
             className={fieldClassName}
           />
         </label>
-        <label className="space-y-1">
-          <span className="text-[11px] text-muted-foreground">分组（Section）</span>
+        <label className="space-y-1 md:col-span-2">
+          <span className="text-[11px] text-muted-foreground">子分组（Section）</span>
           <input
             aria-label={`分组（Section） ${item.id}`}
             value={sectionName}
@@ -810,9 +772,9 @@ function TodoDetails({
           <textarea
             aria-label={`备注 ${item.id}`}
             value={notes}
-            rows={3}
+            rows={4}
             maxLength={20000}
-            placeholder="补充背景、链接或判断"
+            placeholder="补充背景、验收要点或链接"
             onChange={(event) => setNotes(event.target.value)}
             className={`${fieldClassName} resize-y`}
           />
@@ -908,10 +870,14 @@ function TodoRow({
   };
 
   return (
-    <div className={divider ? "border-t border-border" : undefined} data-todo-row>
+    <div
+      className={divider ? "border-t border-border" : undefined}
+      data-todo-row
+      title={`${item.id} ${item.title}`}
+    >
       <div
         onClick={onSurfaceClick}
-        className={`group flex items-start gap-1.5 px-2.5 py-2.5 transition-colors sm:gap-2 sm:px-3.5 ${
+        className={`group flex items-start gap-2.5 px-2.5 py-2.5 transition-colors sm:px-3.5 ${
           expanded ? "bg-muted" : "hover:bg-accent"
         }`}
       >
@@ -926,7 +892,7 @@ function TodoRow({
             void toggleCompleted();
           }}
           style={checkStyle(color, checked)}
-          className={`mt-0.5 flex h-5 w-5 shrink-0 touch-manipulation cursor-pointer items-center justify-center rounded-full border transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default ${
+          className={`mt-0.5 flex h-5 w-5 shrink-0 touch-manipulation cursor-pointer appearance-none items-center justify-center rounded-full border transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default ${
             color
               ? ""
               : checked
@@ -937,42 +903,18 @@ function TodoRow({
           <CheckIcon />
         </button>
         <div className="min-w-0 flex-1" data-todo-main>
-          <div className="float-right ml-1 flex shrink-0 items-center gap-1" data-todo-rail>
-            <ThreadCountBadge item={item} onShowThreads={onShowThreads} />
-            {item.completedAt === null ? (
-              <StartSessionButton item={item} onError={onError} variant="icon" />
-            ) : null}
-            <button
-              type="button"
-              aria-label={expanded ? `收起 ${item.id} 详情` : `展开 ${item.id} 详情`}
-              aria-expanded={expanded}
-              aria-controls={expanded ? detailsId : undefined}
-              onClick={(event) => {
-                event.stopPropagation();
-                onToggle();
-              }}
-              className={iconButtonClassName}
+          <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+            <p
+              data-todo-title
+              title={`${item.id} ${item.title}`}
+              className="min-w-0 break-words text-sm font-medium leading-5 text-foreground"
             >
-              <ChevronIcon open={expanded} />
-            </button>
-          </div>
-          <p data-todo-title className="break-words text-sm font-medium leading-5 text-foreground">
-            {item.title}
-          </p>
-          {item.nextStep ? (
-            <p className="mt-0.5 line-clamp-2 break-words text-xs leading-5 text-muted-foreground sm:line-clamp-1">
-              {item.nextStep}
+              {item.title}
             </p>
-          ) : null}
-          <div className="clear-both mt-1 flex flex-wrap items-center gap-1.5">
             {showListChip && item.listName ? (
               <span
-                className="inline-flex max-w-full items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] text-foreground"
-                style={
-                  color
-                    ? { backgroundColor: COLOR_STYLE[color].soft }
-                    : undefined
-                }
+                className="inline-flex max-w-full shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                style={color ? { backgroundColor: COLOR_STYLE[color].soft } : undefined}
               >
                 <span
                   aria-hidden="true"
@@ -982,8 +924,26 @@ function TodoRow({
                 <span className="truncate">{item.listName}</span>
               </span>
             ) : null}
-            <span className="text-[11px] tabular-nums text-muted-foreground">{item.id}</span>
           </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5" data-todo-rail>
+          <ThreadCountBadge item={item} onShowThreads={onShowThreads} />
+          {item.completedAt === null ? (
+            <StartSessionButton item={item} onError={onError} variant="icon" />
+          ) : null}
+          <button
+            type="button"
+            aria-label={expanded ? `收起 ${item.id} 详情` : `展开 ${item.id} 详情`}
+            aria-expanded={expanded}
+            aria-controls={expanded ? detailsId : undefined}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggle();
+            }}
+            className={iconButtonClassName}
+          >
+            <ChevronIcon open={expanded} />
+          </button>
         </div>
       </div>
       {expanded ? (
@@ -1201,7 +1161,6 @@ function DoneRow({
       <div className="min-w-0 flex-1">
         <p className="break-words text-sm text-muted-foreground">{item.title}</p>
         <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-          <span className="tabular-nums">{item.id}</span>
           {item.completedAt ? <time dateTime={item.completedAt}>{formatTime(item.completedAt)}</time> : null}
         </div>
       </div>
@@ -1471,8 +1430,11 @@ function ListBar({
       <button
         type="button"
         aria-pressed={groupByList}
+        title={groupByList ? "改为平铺列表" : "按项目分组"}
         onClick={onToggleGroup}
-        className={quietButtonClassName}
+        className={`${quietButtonClassName} ${
+          groupByList ? "bg-muted text-foreground" : ""
+        }`}
       >
         按项目分组
       </button>
@@ -1541,7 +1503,7 @@ function TodoPanel(_props: PluginNavPanelProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showDone, setShowDone] = useState(false);
   const [listFilter, setListFilter] = useState<string | null>(null);
-  const [groupByList, setGroupByList] = useState(false);
+  const [groupByList, setGroupByList] = useState(true);
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => new Set());
 
   const refresh = useCallback(() => {

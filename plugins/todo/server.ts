@@ -12,8 +12,8 @@ import {
   TODO_CHANGED_EVENT,
   TODO_COLORS,
   TODO_DONE_SNAPSHOT_LIMIT,
+  TODO_LEGACY_NEXT_STEP_MAX_LENGTH,
   TODO_LOG_TEXT_MAX_LENGTH,
-  TODO_NEXT_STEP_MAX_LENGTH,
   TODO_NOTES_MAX_LENGTH,
   TODO_PROPOSAL_REASON_MAX_LENGTH,
   TODO_REVISION_LIMIT_DEFAULT,
@@ -73,6 +73,7 @@ type ItemRow = {
   title: string;
   bucket: TodoBucket;
   notes: string;
+  /** Legacy physical column. Always migrated into `notes` and cleared. */
   next_step: string;
   proposal_reason: string | null;
   list_name: string;
@@ -106,6 +107,22 @@ type LogRow = {
 };
 
 const escapeLikePattern = (value: string) => value.replace(/[\\%_]/g, "\\$&");
+
+/**
+ * The todo title is the single action. Older data and scripts may still carry
+ * a "next step"; fold that text into notes once, without a label that would
+ * resurrect the retired field.
+ */
+function appendToNotes(notes: string, nextStep: string): string {
+  const text = nextStep.trim();
+  if (text.length === 0) return notes;
+  if (notes.includes(text)) return notes;
+  const base = notes.trimEnd();
+  const combined = base.length === 0 ? text : `${base}\n\n${text}`;
+  return combined.length > TODO_NOTES_MAX_LENGTH
+    ? combined.slice(0, TODO_NOTES_MAX_LENGTH)
+    : combined;
+}
 
 function parseCli<T>(schema: z.ZodType<T>, value: unknown): T {
   const parsed = schema.safeParse(value);
@@ -141,13 +158,13 @@ const proposeTodoInput = z.object({
   title: z.string().trim().min(1).max(TODO_TITLE_MAX_LENGTH),
   reason: z.string().trim().min(1).max(TODO_PROPOSAL_REASON_MAX_LENGTH),
   notes: z.string().max(TODO_NOTES_MAX_LENGTH).default(""),
-  nextStep: z.string().max(TODO_NEXT_STEP_MAX_LENGTH).default(""),
+  legacyNextStep: z.string().max(TODO_LEGACY_NEXT_STEP_MAX_LENGTH).default(""),
   threadId: z.string().trim().min(1).optional(),
 });
 
 const quickAddCliInput = quickAddInput.extend({
   notes: z.string().max(TODO_NOTES_MAX_LENGTH).default(""),
-  nextStep: z.string().max(TODO_NEXT_STEP_MAX_LENGTH).default(""),
+  legacyNextStep: z.string().max(TODO_LEGACY_NEXT_STEP_MAX_LENGTH).default(""),
   threadId: z.string().trim().min(1).optional(),
 });
 
@@ -155,7 +172,6 @@ type CreateTodoInput = {
   title: string;
   bucket: TodoBucket;
   notes: string;
-  nextStep: string;
   proposalReason?: string | null;
   threadId?: string;
   listName?: string;
@@ -166,7 +182,7 @@ type UpdateTodoValues = {
   title?: string;
   bucket?: TodoFormalBucket;
   notes?: string;
-  nextStep?: string;
+  legacyNextStep?: string;
   listName?: string;
   sectionName?: string;
   sortOrder?: number;
@@ -243,21 +259,21 @@ function recommendStartEnvironment(threads: TodoThreadLink[]): {
 
 function buildStartInstruction(itemId: string, hasThreads: boolean): string {
   if (!hasThreads) {
-    return `开工第一步先运行 \`bb todo link ${itemId}\` 将本会话绑定到该待办，然后按上面的下一步和备注推进；阶段收口时用 \`bb todo log ${itemId}\` 更新进展。`;
+    return `开工第一步先运行 \`bb todo link ${itemId}\` 将本会话绑定到该待办，然后按标题与备注推进；阶段收口时用 \`bb todo log ${itemId}\` 更新进展。`;
   }
   return `开工第一步先运行 \`bb todo link ${itemId}\` 将本会话绑定到该待办；请结合上述 \`@thread:...\` 关联会话的上下文（需要细节时用 \`bb thread log <threadId> --limit 10\` 捞取）继续推进，阶段收口时用 \`bb todo log ${itemId}\` 更新进展。`;
 }
 
 function buildStartPrompt(
-  item: Pick<TodoItem, "id" | "title" | "nextStep" | "notes">,
+  item: Pick<TodoItem, "id" | "title" | "listName" | "sectionName" | "notes">,
   threads: PromptThread[],
   omittedCount: number,
 ): string {
   const instruction = buildStartInstruction(item.id, threads.length > 0);
   const assemble = (notesLimit: number, outputLimit: number): string => {
     const parts: string[] = [`推进待办 ${item.id}：${item.title}`];
-    const nextStep = item.nextStep.trim();
-    if (nextStep.length > 0) parts.push(`下一步：${nextStep}`);
+    const placement = [item.listName, item.sectionName].filter((part) => part.length > 0).join(" / ");
+    if (placement.length > 0) parts.push(`清单：${placement}`);
     const notes = item.notes.trim();
     if (notes.length > 0 && notesLimit > 0) {
       const truncated = notes.length > notesLimit;
@@ -369,6 +385,23 @@ export default function plugin(bb: BbPluginApi): void {
   ensureColumn("todo_items", "section_name", "section_name TEXT NOT NULL DEFAULT ''");
   ensureColumn("todo_items", "deleted_at", "deleted_at TEXT");
 
+  // Keep the physical `next_step` column so existing data.db files open, but
+  // fold every legacy value into notes once and clear it. `WHERE next_step <> ''`
+  // makes this idempotent on later starts.
+  const legacySteps = db
+    .prepare("SELECT seq, notes, next_step FROM todo_items WHERE next_step <> ''")
+    .all() as { seq: number; notes: string; next_step: string }[];
+  if (legacySteps.length > 0) {
+    const mergeStep = db.prepare("UPDATE todo_items SET notes = ?, next_step = '' WHERE seq = ?");
+    const clearStep = db.prepare("UPDATE todo_items SET next_step = '' WHERE seq = ?");
+    db.transaction(() => {
+      for (const row of legacySteps) {
+        if (row.next_step.trim().length === 0) clearStep.run(row.seq);
+        else mergeStep.run(appendToNotes(row.notes, row.next_step), row.seq);
+      }
+    })();
+  }
+
   const now = () => new Date().toISOString();
   const activeSql = "deleted_at IS NULL";
 
@@ -389,7 +422,6 @@ export default function plugin(bb: BbPluginApi): void {
     title: row.title,
     bucket: row.bucket,
     notes: row.notes,
-    nextStep: row.next_step,
     proposalReason: row.proposal_reason,
     listName: row.list_name,
     sectionName: row.section_name,
@@ -571,6 +603,9 @@ export default function plugin(bb: BbPluginApi): void {
 
   const upsertBundle = (bundle: ItemSnapshot) => {
     const item = bundle.item;
+    // `next_step` stays in old revision snapshots. Fold it into notes and
+    // write an empty legacy column so undo cannot resurrect the retired field.
+    const notes = appendToNotes(item.notes, item.next_step);
     db.prepare(
       `INSERT INTO todo_items (
         seq, title, bucket, notes, next_step, proposal_reason, completed_at, sort_order,
@@ -593,8 +628,8 @@ export default function plugin(bb: BbPluginApi): void {
       item.seq,
       item.title,
       item.bucket,
-      item.notes,
-      item.next_step,
+      notes,
+      "",
       item.proposal_reason,
       item.completed_at,
       item.sort_order,
@@ -802,14 +837,13 @@ export default function plugin(bb: BbPluginApi): void {
       const result = db
         .prepare(
           `INSERT INTO todo_items
-            (title, bucket, notes, next_step, proposal_reason, completed_at, sort_order, created_at, updated_at, list_name, section_name)
-           VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?)`,
+            (title, bucket, notes, proposal_reason, completed_at, sort_order, created_at, updated_at, list_name, section_name)
+           VALUES (?, ?, ?, ?, NULL, 0, ?, ?, ?, ?)`,
         )
         .run(
           placement.title,
           input.bucket,
           input.notes,
-          input.nextStep,
           input.proposalReason ?? null,
           timestamp,
           timestamp,
@@ -856,13 +890,13 @@ export default function plugin(bb: BbPluginApi): void {
       fields.push("bucket = ?");
       valuesToBind.push(values.bucket);
     }
-    if (values.notes !== undefined) {
+    const notes =
+      values.legacyNextStep !== undefined
+        ? appendToNotes(values.notes !== undefined ? values.notes : row.notes, values.legacyNextStep)
+        : values.notes;
+    if (notes !== undefined) {
       fields.push("notes = ?");
-      valuesToBind.push(values.notes);
-    }
-    if (values.nextStep !== undefined) {
-      fields.push("next_step = ?");
-      valuesToBind.push(values.nextStep);
+      valuesToBind.push(notes);
     }
     if (values.listName !== undefined) {
       fields.push("list_name = ?");
@@ -1050,11 +1084,6 @@ export default function plugin(bb: BbPluginApi): void {
     const mergedLog = [`Merged inbox proposal: ${source.title}`];
     if (source.proposal_reason) mergedLog.push(`Reason: ${source.proposal_reason}`);
     if (source.notes) mergedLog.push(`Notes: ${source.notes}`);
-    if (source.next_step.trim().length > 0) mergedLog.push(`Next step: ${source.next_step}`);
-    const inheritedNextStep =
-      target.next_step.trim().length === 0 && source.next_step.trim().length > 0
-        ? source.next_step
-        : target.next_step;
     db.transaction(() => {
       const beforeSource = captureBundle(seq);
       const beforeTarget = captureBundle(targetSeq);
@@ -1066,11 +1095,6 @@ export default function plugin(bb: BbPluginApi): void {
       for (const link of linked) {
         linkThreadRow(targetSeq, link.thread_id, link.note, timestamp, "fill");
       }
-      db.prepare("UPDATE todo_items SET next_step = ?, updated_at = ? WHERE seq = ?").run(
-        inheritedNextStep,
-        timestamp,
-        targetSeq,
-      );
       softDelete(seq, timestamp);
       const after = [captureBundle(seq), captureBundle(targetSeq)].filter(
         (bundle): bundle is ItemSnapshot => bundle !== null,
@@ -1091,16 +1115,19 @@ export default function plugin(bb: BbPluginApi): void {
 
   const addLog = async (
     input: z.infer<typeof addTodoLogInput>,
+    legacyNextStep?: string,
   ): Promise<TodoItem> => {
     const seq = mustParseId(input.id);
-    requireItemRow(seq);
+    const row = requireItemRow(seq);
     const threadId = input.threadId ?? null;
     const timestamp = now();
+    const notes =
+      legacyNextStep === undefined ? undefined : appendToNotes(row.notes, legacyNextStep);
     db.transaction(() => {
       insertLog(seq, input.text, threadId, timestamp);
-      if (input.nextStep !== undefined) {
-        db.prepare("UPDATE todo_items SET next_step = ?, updated_at = ? WHERE seq = ?").run(
-          input.nextStep,
+      if (notes !== undefined) {
+        db.prepare("UPDATE todo_items SET notes = ?, updated_at = ? WHERE seq = ?").run(
+          notes,
           timestamp,
           seq,
         );
@@ -1200,10 +1227,8 @@ export default function plugin(bb: BbPluginApi): void {
     }
     if (search.length > 0) {
       const term = `%${escapeLikePattern(search)}%`;
-      clauses.push(
-        "(title LIKE ? ESCAPE '\\' OR notes LIKE ? ESCAPE '\\' OR next_step LIKE ? ESCAPE '\\')",
-      );
-      params.push(term, term, term);
+      clauses.push("(title LIKE ? ESCAPE '\\' OR notes LIKE ? ESCAPE '\\')");
+      params.push(term, term);
     }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
     const order =
@@ -1293,7 +1318,6 @@ export default function plugin(bb: BbPluginApi): void {
           bucket: item.bucket as TodoFormalBucket,
           listName: item.listName,
           sectionName: item.sectionName,
-          nextStep: item.nextStep,
           latestLog: item.logs[0] ?? null,
           threads: item.threads,
           hasRunningThread,
@@ -1529,7 +1553,6 @@ export default function plugin(bb: BbPluginApi): void {
           title: input.title,
           bucket: input.bucket,
           notes: "",
-          nextStep: "",
           listName: input.listName,
           sectionName: input.sectionName,
         },
@@ -1542,7 +1565,6 @@ export default function plugin(bb: BbPluginApi): void {
           title: input.title,
           bucket: input.bucket,
           notes: input.notes,
-          nextStep: input.nextStep,
           listName: input.listName,
           sectionName: input.sectionName,
           sortOrder: input.sortOrder,
@@ -1617,10 +1639,14 @@ export default function plugin(bb: BbPluginApi): void {
     return threadId;
   };
 
+  const placementLabel = (item: Pick<TodoItem, "listName" | "sectionName">): string => {
+    if (item.listName.length === 0) return "";
+    return `  [${item.listName}${item.sectionName.length > 0 ? `/${item.sectionName}` : ""}]`;
+  };
+
   const humanItemSummary = (item: TodoItem): string => {
     const state = item.completedAt !== null ? "done" : item.bucket;
-    const next = item.nextStep.length > 0 ? ` — next: ${item.nextStep}` : "";
-    return `${item.id}  ${state}  ${item.title}${next}`;
+    return `${item.id}  ${state}${placementLabel(item)}  ${item.title}`;
   };
 
   const humanItemDetail = (item: TodoItem): string => {
@@ -1629,7 +1655,6 @@ export default function plugin(bb: BbPluginApi): void {
     if (item.sectionName) lines.push(`section: ${item.sectionName}`);
     if (item.proposalReason) lines.push(`proposal: ${item.proposalReason}`);
     if (item.notes) lines.push(`notes: ${item.notes}`);
-    if (item.nextStep) lines.push(`next: ${item.nextStep}`);
     lines.push(`created: ${item.createdAt}`, `updated: ${item.updatedAt}`);
     if (item.threads.length > 0) {
       lines.push("threads:");
@@ -1665,10 +1690,9 @@ export default function plugin(bb: BbPluginApi): void {
           ? "waiting"
           : "running";
       const place = item.listName
-        ? `  ${item.listName}${item.sectionName ? `/${item.sectionName}` : ""}`
+        ? `  [${item.listName}${item.sectionName ? `/${item.sectionName}` : ""}]`
         : "";
       lines.push(`${item.id}  ${item.bucket}${place}  ${item.title}  [${flag}]`);
-      if (item.nextStep) lines.push(`  next: ${item.nextStep}`);
       if (item.latestLog) lines.push(`  last log: ${item.latestLog.text}`);
       if (item.threads.length > 0) {
         lines.push(`  threads: ${item.threads.map((thread) => thread.threadId).join(", ")}`);
@@ -1703,7 +1727,7 @@ export default function plugin(bb: BbPluginApi): void {
             },
             "next-step": {
               type: "string",
-              description: `Optional next step (at most ${TODO_NEXT_STEP_MAX_LENGTH} characters).`,
+              description: `Deprecated: appends to notes for older scripts (at most ${TODO_LEGACY_NEXT_STEP_MAX_LENGTH} characters).`,
             },
             "link-current": {
               type: "boolean",
@@ -1724,7 +1748,7 @@ export default function plugin(bb: BbPluginApi): void {
               title: positionals.title,
               bucket: options.bucket,
               notes: options.notes,
-              nextStep: options["next-step"],
+              legacyNextStep: options["next-step"],
               threadId: options["link-current"] ? requireCurrentThread(ctx) : undefined,
               listName: options.list,
               sectionName: options.section,
@@ -1734,8 +1758,7 @@ export default function plugin(bb: BbPluginApi): void {
                 {
                   title: input.title,
                   bucket: input.bucket,
-                  notes: input.notes,
-                  nextStep: input.nextStep,
+                  notes: appendToNotes(input.notes, input.legacyNextStep),
                   threadId: input.threadId,
                   listName: input.listName,
                   sectionName: input.sectionName,
@@ -1766,7 +1789,7 @@ export default function plugin(bb: BbPluginApi): void {
             },
             "next-step": {
               type: "string",
-              description: `Optional next step (at most ${TODO_NEXT_STEP_MAX_LENGTH} characters).`,
+              description: `Deprecated: appends to notes for older scripts (at most ${TODO_LEGACY_NEXT_STEP_MAX_LENGTH} characters).`,
             },
             "link-current": {
               type: "boolean",
@@ -1787,7 +1810,7 @@ export default function plugin(bb: BbPluginApi): void {
               title: positionals.title,
               reason: options.reason,
               notes: options.notes,
-              nextStep: options["next-step"],
+              legacyNextStep: options["next-step"],
               threadId: options["link-current"] ? requireCurrentThread(ctx) : undefined,
             });
             const placed = parseCli(
@@ -1802,8 +1825,7 @@ export default function plugin(bb: BbPluginApi): void {
                 {
                   title: input.title,
                   bucket: "inbox",
-                  notes: input.notes,
-                  nextStep: input.nextStep,
+                  notes: appendToNotes(input.notes, input.legacyNextStep),
                   proposalReason: input.reason,
                   threadId: input.threadId,
                   listName: placed.listName,
@@ -1911,7 +1933,7 @@ export default function plugin(bb: BbPluginApi): void {
             },
             search: {
               type: "string",
-              description: "Case-insensitive text search over title, notes, and next step.",
+              description: "Case-insensitive text search over title and notes.",
             },
             list: {
               type: "string",
@@ -1967,7 +1989,7 @@ export default function plugin(bb: BbPluginApi): void {
             },
             "next-step": {
               type: "string",
-              description: `Replace next step (at most ${TODO_NEXT_STEP_MAX_LENGTH} characters).`,
+              description: `Deprecated: appends to notes for older scripts (at most ${TODO_LEGACY_NEXT_STEP_MAX_LENGTH} characters).`,
             },
             list: {
               type: "string",
@@ -1998,7 +2020,6 @@ export default function plugin(bb: BbPluginApi): void {
               title: options.title,
               bucket: options.bucket,
               notes: options.notes,
-              nextStep: options["next-step"],
               listName: options.list,
               sectionName: options.section,
             });
@@ -2009,7 +2030,7 @@ export default function plugin(bb: BbPluginApi): void {
                   title: input.title,
                   bucket: input.bucket,
                   notes: input.notes,
-                  nextStep: input.nextStep,
+                  legacyNextStep: options["next-step"],
                   listName: input.listName,
                   sectionName: input.sectionName,
                   sortOrder: input.sortOrder,
@@ -2089,7 +2110,7 @@ export default function plugin(bb: BbPluginApi): void {
           options: {
             "next-step": {
               type: "string",
-              description: `Replace next step (at most ${TODO_NEXT_STEP_MAX_LENGTH} characters).`,
+              description: `Deprecated: appends to notes for older scripts (at most ${TODO_LEGACY_NEXT_STEP_MAX_LENGTH} characters).`,
             },
             "no-link": {
               type: "boolean",
@@ -2102,10 +2123,9 @@ export default function plugin(bb: BbPluginApi): void {
             const input = parseCli(addTodoLogInput, {
               id: cliTodoId(positionals.id),
               text: positionals.text,
-              nextStep: options["next-step"],
               threadId,
             });
-            const item = await cliCall(() => addLog(input));
+            const item = await cliCall(() => addLog(input, options["next-step"]));
             return reply(item, options.json, () =>
               `Logged to ${item.id}${threadId ? ` (${threadId})` : ""}`,
             );
@@ -2200,7 +2220,7 @@ export default function plugin(bb: BbPluginApi): void {
         scan: cliCommand({
           summary: "Scan open formal todos for agent-driven progress",
           description:
-            "Returns inboxCount plus every open formal todo with its next step, latest log, linked threads, hasRunningThread, and actionable flags. actionable = not waiting and no linked thread is active or starting.",
+            "Returns inboxCount plus every open formal todo with its latest log, linked threads, hasRunningThread, and actionable flags. actionable = not waiting and no linked thread is active or starting.",
           options: {
             list: {
               type: "string",

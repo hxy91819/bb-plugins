@@ -39,7 +39,6 @@ function makeItem(seq: number, overrides: Partial<TodoItem> = {}): TodoItem {
     title: `待办 ${seq}`,
     bucket: "focus",
     notes: "",
-    nextStep: "",
     proposalReason: null,
     listName: "",
     sectionName: "",
@@ -142,7 +141,6 @@ function handlers(store: Store) {
       title?: string;
       bucket?: TodoFormalBucket;
       notes?: string;
-      nextStep?: string;
       listName?: string;
       sectionName?: string;
     }) => {
@@ -150,7 +148,6 @@ function handlers(store: Store) {
       if (input.title !== undefined) item.title = input.title;
       if (input.bucket !== undefined) item.bucket = input.bucket;
       if (input.notes !== undefined) item.notes = input.notes;
-      if (input.nextStep !== undefined) item.nextStep = input.nextStep;
       if (input.listName !== undefined) item.listName = input.listName;
       if (input.sectionName !== undefined) item.sectionName = input.sectionName;
       return touch(item);
@@ -260,7 +257,7 @@ async function waitUntil<T>(check: () => T, timeout = 2000): Promise<T> {
   }
 }
 
-test("一行输入按 Enter 秒加；分组胶囊切换生效；中文输入法组合态不误提交", async () => {
+test("一行输入按 Enter 秒加；右侧分组选择器切换生效；中文输入法组合态不误提交", async () => {
   const store = new Store();
   const slot = await mountedPanel(store);
   try {
@@ -286,11 +283,13 @@ test("一行输入按 Enter 秒加；分组胶囊切换生效；中文输入法�
     );
     fireEvent.compositionEnd(input);
 
-    fireEvent.click(slot.getByRole("button", { name: "Later" }));
-    assert.equal(
-      slot.getByRole("button", { name: "Later" }).getAttribute("aria-pressed"),
-      "true",
-    );
+    const bucketSelect = slot.getByLabelText("添加到分组") as HTMLSelectElement;
+    assert.equal(bucketSelect.value, "focus");
+    assert.ok(bucketSelect.className.includes("h-7"));
+    assert.ok(bucketSelect.className.includes("border-0"));
+    assert.ok(bucketSelect.className.includes("bg-muted"));
+    fireEvent.change(bucketSelect, { target: { value: "later" } });
+    assert.equal(bucketSelect.value, "later");
     fireEvent.change(input, { target: { value: "下周再看" } });
     fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() => assert.equal(input.value, ""));
@@ -307,7 +306,7 @@ test("一行输入按 Enter 秒加；分组胶囊切换生效；中文输入法�
 
 test("圆形勾选完成待办，已完成区默认收起，展开后可一键恢复", async () => {
   const store = new Store();
-  const item = store.add({ title: "写面板", nextStep: "先画布局" });
+  const item = store.add({ title: "写面板", notes: "先画布局" });
   const slot = await mountedPanel(store);
   try {
     await slot.findByText("写面板");
@@ -473,16 +472,16 @@ test("会话胶囊与日志里的 threadId 都跳到对应 BB 会话", async () 
   }
 });
 
-test("行内详情保存标题、下一步、备注与分组，并可删除条目", async () => {
+test("行内详情保存标题、备注与分组，并可删除条目", async () => {
   const store = new Store();
-  store.add({ title: "写前端", nextStep: "旧下一步", notes: "旧备注" });
+  store.add({ title: "写前端", notes: "旧备注" });
   const slot = await mountedPanel(store);
   try {
     await slot.findByText("写前端");
     fireEvent.click(slot.getByText("写前端"));
+    assert.equal(slot.queryByLabelText("下一步 T-1"), null);
     fireEvent.change(slot.getByLabelText("标题 T-1"), { target: { value: "写清亮前端" } });
     fireEvent.change(slot.getByLabelText("分组 T-1"), { target: { value: "waiting" } });
-    fireEvent.change(slot.getByLabelText("下一步 T-1"), { target: { value: "实现面板" } });
     fireEvent.change(slot.getByLabelText("备注 T-1"), { target: { value: "保持安静" } });
     fireEvent.click(slot.getByRole("button", { name: "保存" }));
     await waitFor(() =>
@@ -494,7 +493,6 @@ test("行内详情保存标题、下一步、备注与分组，并可删除条�
             id: "T-1",
             title: "写清亮前端",
             bucket: "waiting",
-            nextStep: "实现面板",
             notes: "保持安静",
           },
         },
@@ -561,27 +559,26 @@ test("导航角标优先提示 inbox，其次 focus，realtime 刷新且异常�
 
 test("未修改的详情跟上服务端字段，编辑中的草稿不被 realtime 冲掉", async () => {
   const store = new Store();
-  store.add({ title: "写前端", nextStep: "旧下一步", notes: "旧备注" });
+  store.add({ title: "写前端", notes: "旧备注" });
   const slot = await mountedPanel(store);
   try {
     await slot.findByText("写前端");
     fireEvent.click(slot.getByText("写前端"));
-    const nextStep = () => slot.getByLabelText("下一步 T-1") as HTMLInputElement;
+    const notes = () => slot.getByLabelText("备注 T-1") as HTMLTextAreaElement;
     const title = () => slot.getByLabelText("标题 T-1") as HTMLInputElement;
-    assert.equal(nextStep().value, "旧下一步");
+    assert.equal(notes().value, "旧备注");
 
     const item = store.find("T-1");
-    item.nextStep = "服务端下一步";
+    item.notes = "服务端备注";
     item.updatedAt = "2026-11-13T10:00:01.000Z";
     await slot.behavior.emitRealtime(TODO_CHANGED_EVENT, {});
     await waitFor(() => {
-      if (nextStep().value !== "服务端下一步") throw new Error(nextStep().value);
+      if (notes().value !== "服务端备注") throw new Error(notes().value);
     });
 
-    fireEvent.change(nextStep(), { target: { value: "草稿下一步" } });
+    fireEvent.change(notes(), { target: { value: "草稿备注" } });
     item.title = "服务端新标题";
-    item.nextStep = "服务端又改了下一步";
-    item.notes = "服务端备注";
+    item.notes = "服务端又改了备注";
     item.updatedAt = "2026-11-13T10:00:02.000Z";
     item.logs = [{ id: 7, text: "后台写入的日志", threadId: "thr-bg", createdAt }];
     item.threads = [
@@ -597,9 +594,8 @@ test("未修改的详情跟上服务端字段，编辑中的草稿不被 realtim
     await slot.findByText("后台写入的日志");
     const sessionButtons = await slot.findAllByRole("button", { name: "打开会话 后台会话" });
     assert.ok(sessionButtons.some((button) => button.textContent?.includes("后台会话")));
-    assert.equal(nextStep().value, "草稿下一步");
+    assert.equal(notes().value, "草稿备注");
     assert.equal(title().value, "写前端");
-    assert.equal((slot.getByLabelText("备注 T-1") as HTMLTextAreaElement).value, "旧备注");
   } finally {
     slot.lifecycle.unmount();
   }
@@ -646,6 +642,14 @@ test("未完成正式待办的新会话按钮把 prepareStartSession 送进作�
       method: "prepareStartSession",
       input: { id: "T-1" },
     });
+    // The panel only prefills the composer. It must never ask the server to
+    // spawn a session on the user's behalf.
+    assert.deepEqual(
+      slot.inspection.rpcCalls.filter((call) =>
+        ["start", "spawn", "startSession", "startTodoSession"].includes(call.method),
+      ),
+      [],
+    );
     assert.deepEqual(slot.inspection.navigateCalls.at(-1), {
       method: "toCompose",
       options: {
@@ -698,6 +702,28 @@ test("项目列表筛选、Section 折叠，以及选中列表时 QuickAdd 继�
   const slot = await mountedPanel(store);
   try {
     await slot.findByText("写 demo 期方案");
+    await waitUntil(() => slot.getByRole("heading", { name: "LightSpace" }));
+    const groupToggle = slot.getByRole("button", { name: "按项目分组" });
+    assert.equal(groupToggle.getAttribute("aria-pressed"), "true");
+    const groupedRow = slot.getByText("写 demo 期方案").closest("[data-todo-row]");
+    assert.ok(groupedRow);
+    assert.equal((groupedRow as HTMLElement).textContent?.includes("T-1"), false);
+    assert.equal(groupedRow.getAttribute("title"), "T-1 写 demo 期方案");
+    assert.equal(within(groupedRow as HTMLElement).queryByText("LightSpace"), null);
+
+    fireEvent.click(groupToggle);
+    await waitUntil(() => {
+      if (slot.queryByRole("heading", { name: "LightSpace" }) !== null) {
+        throw new Error("list heading still visible");
+      }
+      return true;
+    });
+    const flatRow = slot.getByText("写 demo 期方案").closest("[data-todo-row]");
+    assert.ok(flatRow);
+    assert.ok(within(flatRow as HTMLElement).getByText("LightSpace"));
+    fireEvent.click(slot.getByRole("button", { name: "按项目分组" }));
+    await waitUntil(() => slot.getByRole("heading", { name: "LightSpace" }));
+
     fireEvent.click(slot.getByRole("button", { name: /LightSpace/ }));
     await waitUntil(() => {
       if (slot.queryByText("双形态上架") !== null) throw new Error("other list still visible");
@@ -743,14 +769,13 @@ test("项目列表筛选、Section 折叠，以及选中列表时 QuickAdd 继�
   }
 });
 
-test("折叠行把定宽操作轨放在右侧，长标题与下一步在主列折行，会话胶囊只在详情里", async () => {
+test("折叠行是干净的三段式：标题只在主列，编号留在悬停 title 与详情头", async () => {
   const store = new Store();
   const title = "把托管站的双形态上架方案整理成一份可以交给生产环境的说明";
-  const nextStep = "先补齐演示环境的验收清单，再把生产上架步骤拆成可单独派发的检查项，避免把整份方案揉成一步";
   store.add({
     title,
-    nextStep,
     listName: "LightSpace",
+    sectionName: "Hosting Station",
     threads: [
       {
         threadId: "thr-a",
@@ -771,12 +796,11 @@ test("折叠行把定宽操作轨放在右侧，长标题与下一步在主列�
   const slot = await mountedPanel(store);
   try {
     const titleNode = await slot.findByText(title);
+    assert.ok(titleNode.className.includes("min-w-0"));
     assert.ok(titleNode.className.includes("break-words"));
     assert.ok(titleNode.className.includes("font-medium"));
-    const nextNode = slot.getByText(nextStep);
-    assert.ok(nextNode.className.includes("line-clamp-2"));
-    assert.ok(nextNode.className.includes("break-words"));
-    assert.equal(nextNode.textContent?.startsWith("下一步："), false);
+    assert.equal(titleNode.getAttribute("title"), `T-1 ${title}`);
+    assert.equal(slot.queryByText("下一步"), null);
 
     const row = titleNode.closest("[data-todo-row]");
     assert.ok(row);
@@ -784,17 +808,36 @@ test("折叠行把定宽操作轨放在右侧，长标题与下一步在主列�
     const main = row.querySelector("[data-todo-main]");
     assert.ok(rail);
     assert.ok(main);
+    assert.ok(main.className.includes("min-w-0 flex-1"));
+    assert.ok(rail.className.includes("shrink-0 items-center gap-0.5"));
     assert.equal(rail.contains(titleNode), false);
     assert.equal(main.contains(titleNode), true);
+    assert.equal((row as HTMLElement).textContent?.includes("T-1"), false);
+    assert.equal(row.getAttribute("title"), `T-1 ${title}`);
     assert.equal(within(row as HTMLElement).queryByRole("button", { name: "打开会话 会话甲" }), null);
     assert.ok(within(row as HTMLElement).getByRole("button", { name: "查看 2 个关联会话" }));
 
-    fireEvent.click(slot.getByRole("button", { name: "查看 2 个关联会话" }));
+    const startButton = within(row as HTMLElement).getByRole("button", {
+      name: "开启新会话并带入 2 个关联会话上下文（T-1）",
+    });
+    assert.ok(startButton.className.includes("border-0"));
+    assert.ok(startButton.className.includes("bg-transparent"));
+    assert.ok(startButton.className.includes("appearance-none"));
+
+    fireEvent.click(within(row as HTMLElement).getByRole("button", { name: "展开 T-1 详情" }));
+    assert.ok(await slot.findByText("T-1"));
+    assert.equal(slot.queryByLabelText("下一步 T-1"), null);
     assert.ok(await slot.findByRole("button", { name: "打开会话 会话甲" }));
     assert.ok(slot.getByRole("button", { name: "打开会话 会话乙" }));
+
     const quickAdd = slot.getByRole("textbox", { name: "新待办标题" });
+    assert.ok(quickAdd.className.includes("min-w-0"));
+    assert.ok(quickAdd.className.includes("border-0"));
+    assert.ok(quickAdd.className.includes("bg-transparent"));
     assert.ok(quickAdd.className.includes("text-base"));
     assert.ok(quickAdd.className.includes("sm:text-sm"));
+    const quickAddRow = quickAdd.closest("div.flex-nowrap");
+    assert.ok(quickAddRow);
   } finally {
     slot.lifecycle.unmount();
   }

@@ -22,7 +22,12 @@ export type TodoColor = (typeof TODO_COLORS)[number];
 
 export const TODO_TITLE_MAX_LENGTH = 500;
 export const TODO_NOTES_MAX_LENGTH = 20_000;
-export const TODO_NEXT_STEP_MAX_LENGTH = 2_000;
+/**
+ * Legacy compatibility only. Older automation still passes `--next-step`;
+ * the server folds that text into `notes` instead of rejecting the command.
+ * Nothing else exposes a separate next-step field.
+ */
+export const TODO_LEGACY_NEXT_STEP_MAX_LENGTH = 2_000;
 export const TODO_LOG_TEXT_MAX_LENGTH = 4_000;
 export const TODO_PROPOSAL_REASON_MAX_LENGTH = 2_000;
 export const TODO_THREAD_NOTE_MAX_LENGTH = 1_000;
@@ -99,7 +104,6 @@ export const todoItemSchema = z.object({
   title: z.string(),
   bucket: todoBucketSchema,
   notes: z.string(),
-  nextStep: z.string(),
   proposalReason: z.string().nullable(),
   listName: z.string(),
   sectionName: z.string(),
@@ -159,7 +163,6 @@ export const todoScanItemSchema = z.object({
   bucket: todoFormalBucketSchema,
   listName: z.string(),
   sectionName: z.string(),
-  nextStep: z.string(),
   latestLog: todoLogEntrySchema.nullable(),
   threads: z.array(todoThreadLinkSchema),
   hasRunningThread: z.boolean(),
@@ -189,7 +192,6 @@ export const updateTodoInput = z.object({
   title: z.string().trim().min(1).max(TODO_TITLE_MAX_LENGTH).optional(),
   bucket: todoFormalBucketSchema.optional(),
   notes: z.string().max(TODO_NOTES_MAX_LENGTH).optional(),
-  nextStep: z.string().max(TODO_NEXT_STEP_MAX_LENGTH).optional(),
   listName: todoListNameSchema.optional(),
   sectionName: todoSectionNameSchema.optional(),
   sortOrder: z.number().optional(),
@@ -244,7 +246,6 @@ export const triageInboxInput = z
 export const addTodoLogInput = z.object({
   id: todoIdSchema,
   text: z.string().trim().min(1).max(TODO_LOG_TEXT_MAX_LENGTH),
-  nextStep: z.string().max(TODO_NEXT_STEP_MAX_LENGTH).optional(),
   threadId: z.string().trim().min(1).optional(),
 });
 

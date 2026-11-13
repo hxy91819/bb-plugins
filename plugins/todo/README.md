@@ -2,7 +2,9 @@
 
 Lightweight Apple-style macro todos for BB. The plugin ships the shared
 contract, SQLite storage, panel RPC, the `bb todo` CLI, the built-in agent skill,
-and an Apple Reminders-style single-column panel. The panel is intentionally
+and an Apple Reminders-style single-column panel. The model is deliberately
+minimal: the title is the single executable item, and everything else that
+needs context or acceptance criteria lives in `notes`. The panel is intentionally
 small: a one-line add bar, quiet focus/later/waiting lists, an inbox triage strip
 for agent proposals, inline row details, and a collapsed completed drawer.
 
@@ -46,7 +48,8 @@ bb todo triage T-4 --action merge --into T-1
 bb todo list --list LightSpace --section "生产与上架" --json
 bb todo list --status inbox --json
 bb todo show T-1 --json
-bb todo log T-1 "Reviewed storage schema" --next-step "Write tests"
+bb todo update T-1 --notes "Write the tests next"
+bb todo log T-1 "Reviewed storage schema"
 bb todo link T-1 --note "implementation thread"
 bb todo start T-1 --prompt "先看失败的测试"
 bb todo scan --list LightSpace --json
@@ -59,9 +62,14 @@ Every subcommand accepts `--json`. JSON failures use the plugin CLI envelope
 and `unlink` default to `ctx.threadId`; when there is no current thread, pass
 `--thread`. `log` also binds the current thread unless `--no-link` is given.
 
-`bb todo scan` returns `inboxCount` and every open formal todo with `nextStep`,
-the latest log, linked threads, `hasRunningThread`, and `actionable`
-(`bucket !== "waiting"` and no linked thread is `starting` or `active`).
+`bb todo scan` returns `inboxCount` and every open formal todo with its latest
+log, linked threads, `hasRunningThread`, and `actionable` (`bucket !== "waiting"`
+and no linked thread is `starting` or `active`).
+
+Older automation may still pass `--next-step` to `add`, `propose`, `update`, or
+`log`. That option is deprecated but does not fail: the text is appended to
+`notes`, with a blank line when notes already have content. No command prints or
+accepts a separate next-step field.
 
 `bb todo add` only creates formal todos. Inbox entries come exclusively from
 `propose` and leave the inbox only through `triage`; `update` and `done` reject
@@ -73,10 +81,11 @@ Undoing a merge restores both the proposal and the target.
 `bb todo start <id>` builds the same prompt as the panel action, spawns a
 thread with `project-default`, and links that thread back to the todo. The
 project is `--project`, else the newest linked thread that still has a project,
-else the current bb project. `--prompt` is appended after the generated text. Merging
-an inbox item moves its existing logs onto the target and, when the target
-`next step` is empty, copies the source `next step`. An empty thread note never
-replaces a note already stored on the target.
+else the current bb project. `--prompt` is appended after the generated text.
+The generated prompt carries the title, list/section, notes, and linked
+`@thread:` lines; it has no separate next-step section. Merging an inbox item
+moves its existing logs onto the target and keeps its notes in that merged log.
+An empty thread note never replaces a note already stored on the target.
 
 ## Panel
 
@@ -85,30 +94,34 @@ host owns the title bar; the panel body starts with the add bar and never
 repeats the page title.
 
 - **Quick add**: type a title, press Enter (or the `+` button), and the todo is
-  created in the selected `Focus` / `Later` / `Waiting` pill. Enter during an
-  IME composition is ignored. A selected project list is inherited unless the
-  title itself starts with `#List`. On narrow screens the bucket pills wrap so
-  the field stays wide, and every field uses at least 16px type so iOS does not
-  zoom the page on focus.
+  created in the selected `Focus` / `Later` / `Waiting` compact selector. Enter
+  during an IME composition is ignored. A selected project list is inherited
+  unless the title itself starts with `#List`. The `+`, input, and bucket
+  selector stay on one row down to 375px, and every field uses at least 16px
+  type so iOS does not zoom the page on focus.
 - **Inbox**: proposals only appear when the inbox is non-empty. Each proposal
   shows its title, proposal reason, linked thread capsules, and accept
   (including a bucket selector), merge into an open formal todo, or dismiss.
 - **Lists**: a capsule bar filters by project list. The selected list can change
-  color. Inside one list, or with “按项目分组”, rows sit under a colored list
-  heading and collapsible section headings.
-- **Rows**: the round checkbox uses the list color. The collapsed row keeps a
-  fixed right rail: a thread-count badge, an icon-only new-session button, and
-  the disclosure. The title and next step wrap in the remaining column; the id
-  and list chip sit on a quiet meta line. Expanded rows edit the list and
-  section, show the full thread capsules, agent logs, delete, and the labeled
-  new-session control. Log thread ids navigate to the linked BB thread. Unsaved edits in the open
-  details stay put when a realtime refresh arrives; a clean form follows the
-  server fields. Logs and thread capsules keep updating either way.
+  color. Named lists are grouped by default, so each project opens as a colored
+  card with collapsible section headings; “按项目分组” toggles the flat view.
+- **Rows**: the round checkbox uses the list color. The collapsed row is one
+  clean title with a fixed right rail (soft thread-count capsule, ghost
+  new-session icon, disclosure), with no repeated id or next-step line. The
+  `T-17` id appears in the row's hover title and in the expanded detail header.
+  Expanded rows edit the title, bucket, list, section, and notes, show the full
+  thread capsules, agent logs, delete, and the labeled new-session control. In
+  the flat “全部” view a soft list chip follows the title. Log thread ids
+  navigate to the linked BB thread. Unsaved edits in the open details stay put
+  when a realtime refresh arrives; a clean form follows the server fields. Logs
+  and thread capsules keep updating either way.
 - **New session**: each open formal row has an icon button, and the expanded
   row also has a labeled `▶ 开启新会话` button. It asks
-  `prepareStartSession` for a prompt that quotes up to five linked
-  `@thread:` ids, then opens the composer with that draft and, when known, the
-  linked project and environment.
+  `prepareStartSession` for a prompt that carries the title, list/section,
+  notes, and up to five linked `@thread:` ids, then only prefills the composer
+  through `navigate.toCompose({ focusPrompt: true, initialPrompt, ... })`. It
+  never spawns a session from the panel; the user picks the model and project
+  and sends the draft.
 - **Completed**: the bottom `已完成 (N)` drawer starts collapsed and restores a
   todo when its filled checkbox is clicked. The snapshot carries the 20 most
   recent completed items.
@@ -141,8 +154,12 @@ formal todos.
 Migrations create `todo_items`, `todo_threads`, and `todo_logs`, then
 `todo_list_meta` and `todo_revisions`. `list_name`, `section_name`, and
 `deleted_at` are added with `PRAGMA table_info` so an existing database is not
-altered twice. Writes that change a todo share a transaction with their
-revision. Data survives reloads.
+altered twice. The retired physical column `next_step TEXT NOT NULL DEFAULT ''`
+stays in place so existing local databases keep opening; on startup every
+non-empty legacy value is appended to `notes` (unless the note already contains
+it) and the column is cleared, idempotently. Undoing an old revision folds a
+snapshot's legacy next-step text into notes the same way. Writes that change a
+todo share a transaction with their revision. Data survives reloads.
 
 ## Development
 
@@ -157,6 +174,9 @@ bb plugin types --check
 
 `server.test.ts` uses `createFakePluginHost`, whose isolated temp-dir database
 is removed by `harness.lifecycle.dispose()`; no fixture database is written into
-the repo. `app.test.ts` uses JSDOM with `@get-bb/plugin-sdk/testing/app`
-(`loadPluginApp` + `renderSlot`) and `@testing-library/react` to exercise quick
-add, completion, inbox triage, thread navigation, inline edits, and the badge.
+the repo. It also seeds a legacy `next_step` value and reloads the plugin to
+assert the notes migration and the `--next-step` CLI fallback. `app.test.ts`
+uses JSDOM with `@get-bb/plugin-sdk/testing/app` (`loadPluginApp` + `renderSlot`)
+and `@testing-library/react` to exercise quick add, completion, inbox triage,
+thread navigation, inline edits, default grouping, the new-session composer
+prefill, and the badge.
