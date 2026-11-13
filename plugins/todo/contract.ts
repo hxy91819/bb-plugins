@@ -15,6 +15,8 @@ export const TODO_PROPOSAL_REASON_MAX_LENGTH = 2_000;
 export const TODO_THREAD_NOTE_MAX_LENGTH = 1_000;
 /** How many recently completed todos the panel snapshot includes. */
 export const TODO_DONE_SNAPSHOT_LIMIT = 20;
+/** Linked threads quoted in a new-session prompt, newest or active first. */
+export const TODO_START_RELATED_LIMIT = 5;
 
 export const todoBucketSchema = z.enum(["inbox", "focus", "later", "waiting"]);
 export type TodoBucket = z.infer<typeof todoBucketSchema>;
@@ -61,6 +63,8 @@ export const todoThreadLinkSchema = z.object({
   linkedAt: z.string(),
   threadTitle: z.string().nullable().optional(),
   threadStatus: z.string().nullable().optional(),
+  projectId: z.string().nullable().optional(),
+  environmentId: z.string().nullable().optional(),
 });
 export type TodoThreadLink = z.infer<typeof todoThreadLinkSchema>;
 
@@ -208,6 +212,20 @@ export const unlinkTodoThreadInput = z.object({
 
 export const removeTodoInput = z.object({ id: todoIdSchema });
 
+export const prepareStartSessionInput = z.object({
+  id: todoIdSchema,
+});
+
+export const prepareStartSessionOutput = z.object({
+  itemId: z.string(),
+  title: z.string(),
+  projectId: z.string().nullable(),
+  environmentId: z.string().nullable(),
+  initialPrompt: z.string(),
+  relatedThreadCount: z.number().int().nonnegative(),
+});
+export type PrepareStartSessionResult = z.infer<typeof prepareStartSessionOutput>;
+
 const triageInboxOutput = z.object({
   action: triageActionSchema,
   item: todoItemSchema.nullable(),
@@ -254,6 +272,10 @@ export const rpcContract = defineRpcContract({
   remove: {
     input: removeTodoInput,
     output: z.object({ removed: z.boolean() }),
+  },
+  prepareStartSession: {
+    input: prepareStartSessionInput,
+    output: prepareStartSessionOutput,
   },
 });
 

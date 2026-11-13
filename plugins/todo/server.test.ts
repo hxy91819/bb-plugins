@@ -35,7 +35,7 @@ function fixture() {
 async function runJson(
   harness: FakePluginHarness,
   argv: string[],
-  ctx?: { threadId?: string },
+  ctx?: { threadId?: string; projectId?: string },
 ): Promise<unknown> {
   const result = await harness.behavior.runCli([...argv, "--json"], ctx);
   assert.equal(result.exitCode, 0, result.stderr);
@@ -455,6 +455,335 @@ test("panel RPC creates, updates, completes, reopens, and removes a todo", async
     };
     assert.equal(removed.removed, true);
     await assert.rejects(harness.behavior.callRpc("update", { id: created.id, title: "Gone" }));
+  } finally {
+    await harness.lifecycle.dispose();
+  }
+});
+
+test("merge keeps source logs and next step, and does not clobber thread notes", async () => {
+  const { bb, harness } = fixture();
+  try {
+    await plugin(bb);
+    const target = (await runJson(harness, ["add", "Ship the plugin"])) as TodoItem;
+    await runJson(harness, ["link", target.id, "--thread", "thr-shared", "--note", "target note"]);
+    await runJson(harness, ["link", target.id, "--thread", "thr-fill"]);
+    await runJson(harness, ["link", target.id, "--thread", "thr-both", "--note", "target keeps"]);
+    await runJson(harness, ["log", target.id, "target kept", "--no-link"]);
+
+    const proposal = (await runJson(harness, [
+      "propose",
+      "Review the README",
+      "--reason",
+      "from chat",
+      "--notes",
+      "typos",
+      "--next-step",
+      "Ship the patch",
+    ])) as TodoItem;
+    const logged = (await runJson(
+      harness,
+      ["log", proposal.id, "source progress"],
+      { threadId: "thr-source" },
+    )) as TodoItem;
+    const sourceLog = logged.logs.find((entry) => entry.text === "source progress");
+    assert.ok(sourceLog);
+    await runJson(harness, ["link", proposal.id, "--thread", "thr-shared"]);
+    await runJson(harness, ["link", proposal.id, "--thread", "thr-fill", "--note", "from source"]);
+    await runJson(harness, ["link", proposal.id, "--thread", "thr-both", "--note", "source note"]);
+
+    const merged = (await runJson(harness, [
+      "triage",
+      proposal.id,
+      "--action",
+      "merge",
+      "--into",
+      target.id,
+    ])) as { action: string; item: TodoItem };
+    assert.equal(merged.action, "merge");
+    assert.equal(merged.item.nextStep, "Ship the patch");
+    const kept = merged.item.logs.find((entry) => entry.text === "source progress");
+    assert.ok(kept);
+    assert.equal(kept.createdAt, sourceLog.createdAt);
+    assert.equal(kept.threadId, "thr-source");
+    assert.equal(kept.id, sourceLog.id);
+    assert.match(merged.item.logs[0].text, /Merged inbox proposal: Review the README/);
+    assert.match(merged.item.logs[0].text, /Next step: Ship the patch/);
+    assert.ok(merged.item.logs.some((entry) => entry.text === "target kept"));
+    const noteOf = (threadId: string) =>
+      merged.item.threads.find((thread) => thread.threadId === threadId)?.note;
+    assert.equal(noteOf("thr-shared"), "target note");
+    assert.equal(noteOf("thr-fill"), "from source");
+    assert.equal(noteOf("thr-both"), "target keeps");
+    assert.equal((await runJsonError(harness, ["show", proposal.id])).error.code, "not_found");
+
+    const followUp = (await runJson(harness, [
+      "propose",
+      "Do not overwrite",
+      "--reason",
+      "another excerpt",
+      "--next-step",
+      "Do not replace",
+    ])) as TodoItem;
+    const second = (await runJson(harness, [
+      "triage",
+      followUp.id,
+      "--action",
+      "merge",
+      "--into",
+      target.id,
+    ])) as { item: TodoItem };
+    assert.equal(second.item.nextStep, "Ship the patch");
+    assert.match(second.item.logs[0].text, /Next step: Do not replace/);
+
+    await harness.behavior.callRpc("linkThread", {
+      id: target.id,
+      threadId: "thr-shared",
+      note: "",
+    });
+    const afterEmptyRpc = (await runJson(harness, ["show", target.id])) as TodoItem;
+    assert.equal(
+      afterEmptyRpc.threads.find((thread) => thread.threadId === "thr-shared")?.note,
+      "target note",
+    );
+    await runJson(harness, ["link", target.id, "--thread", "thr-shared", "--note", ""]);
+    await runJson(harness, ["log", target.id, "still linked"], { threadId: "thr-shared" });
+    const afterLog = (await runJson(harness, ["show", target.id])) as TodoItem;
+    assert.equal(
+      afterLog.threads.find((thread) => thread.threadId === "thr-shared")?.note,
+      "target note",
+    );
+    const replaced = (await runJson(harness, [
+      "link",
+      target.id,
+      "--thread",
+      "thr-shared",
+      "--note",
+      "replaced on purpose",
+    ])) as TodoItem;
+    assert.equal(
+      replaced.threads.find((thread) => thread.threadId === "thr-shared")?.note,
+      "replaced on purpose",
+    );
+  } finally {
+    await harness.lifecycle.dispose();
+  }
+});
+
+test("prepareStartSession quotes linked threads and a project without failing closed reads", async () => {
+  const threads = new Map([
+    ["thr-active", { status: "active" as const, projectId: "proj-active", environmentId: "env-active" }],
+    ["thr-mid", { status: "idle" as const, projectId: "proj-mid", environmentId: "env-mid" }],
+    ["thr-new", { status: "idle" as const, projectId: "proj-new", environmentId: "env-new" }],
+    ["thr-env-fallback", { status: "idle" as const, projectId: "proj-fallback", environmentId: null }],
+  ]);
+  const { bb, harness } = createFakePluginHost({
+    pluginId: "todo",
+    sdk: {
+      threads: {
+        get: async ({ threadId }) => {
+          if (threadId.startsWith("thr-cap-")) throw new Error("cap thread unread");
+          const known = threads.get(threadId);
+          const response = makeThreadResponse({
+            id: threadId,
+            title: `Thread ${threadId}`,
+            status: known?.status ?? "idle",
+            projectId: known?.projectId ?? "proj-default",
+            environmentId: known ? known.environmentId : "env-default",
+          });
+          if (threadId !== "thr-env-fallback") return response;
+          return Object.assign(response, { environment: { id: "env-included" } });
+        },
+        output: async ({ threadId }) => {
+          if (threadId === "thr-mid") throw new Error("output unavailable");
+          if (threadId === "thr-active") return { output: ` ${"x".repeat(450)} ` };
+          if (threadId === "thr-new") return { output: "tail thr-new" };
+          return { output: null };
+        },
+      },
+    },
+  });
+  const pause = () => new Promise((resolve) => setTimeout(resolve, 15));
+  try {
+    await plugin(bb);
+    const linked = (await runJson(harness, ["add", "Ship the linked todo", "--next-step", "Write tests"])) as TodoItem;
+    await runJson(harness, ["link", linked.id, "--thread", "thr-active", "--note", "running"]);
+    await pause();
+    await runJson(harness, ["link", linked.id, "--thread", "thr-mid"]);
+    await pause();
+    await runJson(harness, ["link", linked.id, "--thread", "thr-new"]);
+
+    const prepared = (await harness.behavior.callRpc("prepareStartSession", {
+      id: linked.id,
+    })) as {
+      itemId: string;
+      projectId: string | null;
+      environmentId: string | null;
+      initialPrompt: string;
+      relatedThreadCount: number;
+    };
+    assert.equal(prepared.itemId, linked.id);
+    assert.equal(prepared.relatedThreadCount, 3);
+    assert.equal(prepared.projectId, "proj-new");
+    assert.equal(prepared.environmentId, "env-new");
+    assert.ok(prepared.initialPrompt.length <= 3000);
+    assert.match(prepared.initialPrompt, new RegExp(`推进待办 ${linked.id}：Ship the linked todo`));
+    assert.match(prepared.initialPrompt, /下一步：Write tests/);
+    assert.match(prepared.initialPrompt, /bb todo link/);
+    assert.match(prepared.initialPrompt, /bb todo log/);
+    const quoted = [...prepared.initialPrompt.matchAll(/^@thread:(\S+)$/gm)].map((match) => match[1]);
+    assert.deepEqual(quoted, ["thr-active", "thr-new", "thr-mid"]);
+    assert.equal(prepared.initialPrompt.includes("x".repeat(450)), false);
+    assert.equal(prepared.initialPrompt.includes(`…${"x".repeat(399)}`), true);
+    assert.match(prepared.initialPrompt, /tail thr-new/);
+    assert.equal(prepared.initialPrompt.includes("output unavailable"), false);
+
+    const capped = (await runJson(harness, ["add", "Too many threads"])) as TodoItem;
+    for (const index of [0, 1, 2, 3, 4, 5]) {
+      await pause();
+      await runJson(harness, ["link", capped.id, "--thread", `thr-cap-${index}`]);
+    }
+    const cappedPrompt = (await harness.behavior.callRpc("prepareStartSession", {
+      id: capped.id,
+    })) as { relatedThreadCount: number; initialPrompt: string; projectId: string | null };
+    assert.equal(cappedPrompt.relatedThreadCount, 5);
+    assert.equal(cappedPrompt.projectId, null);
+    const cappedIds = [...cappedPrompt.initialPrompt.matchAll(/^@thread:(\S+)$/gm)].map((match) => match[1]);
+    assert.deepEqual(cappedIds, ["thr-cap-5", "thr-cap-4", "thr-cap-3", "thr-cap-2", "thr-cap-1"]);
+    assert.match(cappedPrompt.initialPrompt, /其余 1 个关联会话/);
+
+    const fallback = (await runJson(harness, ["add", "Fallback env"])) as TodoItem;
+    await runJson(harness, ["link", fallback.id, "--thread", "thr-env-fallback"]);
+    const fromInclude = (await harness.behavior.callRpc("prepareStartSession", {
+      id: fallback.id,
+    })) as { projectId: string | null; environmentId: string | null; initialPrompt: string };
+    assert.equal(fromInclude.projectId, "proj-fallback");
+    assert.equal(fromInclude.environmentId, "env-included");
+    assert.match(fromInclude.initialPrompt, /@thread:thr-env-fallback/);
+
+    const plain = (await runJson(harness, [
+      "add",
+      "Plain todo",
+      "--notes",
+      "注".repeat(900),
+      "--next-step",
+      "Summarize the note",
+    ])) as TodoItem;
+    const bare = (await harness.behavior.callRpc("prepareStartSession", { id: plain.id })) as {
+      projectId: string | null;
+      environmentId: string | null;
+      initialPrompt: string;
+      relatedThreadCount: number;
+    };
+    assert.equal(bare.relatedThreadCount, 0);
+    assert.equal(bare.projectId, null);
+    assert.equal(bare.environmentId, null);
+    assert.equal(/@thread:/.test(bare.initialPrompt), false);
+    assert.match(bare.initialPrompt, /推进待办/);
+    assert.match(bare.initialPrompt, /下一步：Summarize the note/);
+    assert.match(bare.initialPrompt, new RegExp(`bb todo show ${plain.id}`));
+    assert.equal(bare.initialPrompt.includes("注".repeat(900)), false);
+    assert.ok(bare.initialPrompt.length <= 3000);
+  } finally {
+    await harness.lifecycle.dispose();
+  }
+});
+
+test("bb todo start spawns a thread and links it back", async () => {
+  const spawned: Array<{
+    projectId: string;
+    title?: string;
+    prompt: string;
+    environment: { type: string };
+  }> = [];
+  let spawnedCount = 0;
+  const { bb, harness } = createFakePluginHost({
+    pluginId: "todo",
+    sdk: {
+      threads: {
+        get: async ({ threadId }) =>
+          makeThreadResponse({
+            id: threadId,
+            title: `Thread ${threadId}`,
+            status: "idle",
+            projectId: threadId === "thr-related" ? "proj-from-thread" : "proj-spawned",
+            environmentId: threadId === "thr-related" ? "env-related" : null,
+          }),
+        output: async ({ threadId }) =>
+          threadId === "thr-related" ? { output: "最近在改测试" } : { output: null },
+        spawn: async (args) => {
+          spawnedCount += 1;
+          spawned.push({
+            projectId: args.projectId,
+            title: args.title,
+            prompt: args.prompt ?? "",
+            environment: args.environment,
+          });
+          return makeThreadResponse({
+            id: `thr-spawned-${spawnedCount}`,
+            title: args.title ?? null,
+            projectId: args.projectId,
+            status: "starting",
+          });
+        },
+      },
+    },
+  });
+  try {
+    await plugin(bb);
+    const bare = (await runJson(harness, ["add", "Needs a project"])) as TodoItem;
+    const missing = await runJsonError(harness, ["start", bare.id]);
+    assert.equal(missing.error.code, "missing_project");
+    assert.match(missing.error.hint ?? "", /--project/);
+    assert.equal(spawned.length, 0);
+
+    const fromContext = (await runJson(harness, ["start", bare.id], {
+      projectId: "proj-ctx",
+    })) as { threadId: string; projectId: string; item: TodoItem };
+    assert.equal(fromContext.projectId, "proj-ctx");
+    assert.equal(fromContext.threadId, "thr-spawned-1");
+    assert.equal(spawned[0].environment.type, "project-default");
+    assert.equal(spawned[0].title, "T-1: Needs a project".slice(0, 80));
+    assert.ok(fromContext.item.threads.some((thread) => thread.threadId === "thr-spawned-1"));
+    assert.match(fromContext.item.logs[0].text, /thr-spawned-1/);
+
+    const linked = (await runJson(harness, [
+      "add",
+      "Continue the work",
+      "--next-step",
+      "Open the tests",
+    ])) as TodoItem;
+    await runJson(harness, ["link", linked.id, "--thread", "thr-related", "--note", "prior"]);
+    const started = (await runJson(harness, [
+      "start",
+      linked.id,
+      "--prompt",
+      "额外：先看失败的测试",
+    ])) as {
+      threadId: string;
+      projectId: string;
+      initialPrompt: string;
+      item: TodoItem;
+    };
+    assert.equal(started.projectId, "proj-from-thread");
+    assert.equal(started.threadId, "thr-spawned-2");
+    assert.equal(spawned[1].environment.type, "project-default");
+    assert.match(spawned[1].prompt, /@thread:thr-related/);
+    assert.match(spawned[1].prompt, /最近在改测试/);
+    assert.match(spawned[1].prompt, /额外：先看失败的测试$/);
+    assert.equal(started.initialPrompt, spawned[1].prompt);
+    assert.ok(started.item.threads.some((thread) => thread.threadId === "thr-spawned-2"));
+    assert.equal(started.item.logs[0].threadId, "thr-spawned-2");
+    assert.ok(started.item.threads.some((thread) => thread.threadId === "thr-related" && thread.note === "prior"));
+
+    const overridden = (await runJson(harness, [
+      "start",
+      linked.id,
+      "--project",
+      "proj-explicit",
+    ])) as { projectId: string; threadId: string };
+    assert.equal(overridden.projectId, "proj-explicit");
+    assert.equal(overridden.threadId, "thr-spawned-3");
+    assert.equal(spawned[2].projectId, "proj-explicit");
   } finally {
     await harness.lifecycle.dispose();
   }

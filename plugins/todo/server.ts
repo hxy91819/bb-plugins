@@ -21,8 +21,10 @@ import {
   formatTodoId,
   linkTodoThreadInput,
   parseTodoId,
+  prepareStartSessionOutput,
   quickAddInput,
   rpcContract,
+  TODO_START_RELATED_LIMIT,
   setTodoCompletedInput,
   todoCountsSchema,
   todoScanResultSchema,
@@ -146,6 +148,128 @@ type UpdateTodoValues = {
   sortOrder?: number;
 };
 
+const START_PROMPT_LIMIT = 3_000;
+const START_NOTES_LIMIT = 800;
+const START_OUTPUT_LIMIT = 400;
+
+type PromptThread = {
+  threadId: string;
+  outputTail: string | null;
+};
+
+function isRunningThread(status: string | null | undefined): boolean {
+  return status === "active" || status === "starting";
+}
+
+function clipTail(value: string, max: number): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= max) return trimmed;
+  if (max <= 1) return "…";
+  return `…${trimmed.slice(-(max - 1))}`;
+}
+
+function summarizeThreadOutput(output: string | null): string | null {
+  if (output === null) return null;
+  const compact = output.replace(/\s+/g, " ").trim();
+  if (compact.length === 0) return null;
+  return clipTail(compact, START_OUTPUT_LIMIT);
+}
+
+/** Active threads first, then most recently linked. Capped so the prompt stays short. */
+function selectPromptThreads(threads: TodoThreadLink[]): TodoThreadLink[] {
+  return [...threads]
+    .sort((left, right) => {
+      const activity =
+        Number(isRunningThread(right.threadStatus)) - Number(isRunningThread(left.threadStatus));
+      if (activity !== 0) return activity;
+      const recent = right.linkedAt.localeCompare(left.linkedAt);
+      if (recent !== 0) return recent;
+      return left.threadId.localeCompare(right.threadId);
+    })
+    .slice(0, TODO_START_RELATED_LIMIT);
+}
+
+/** Newest linked thread whose lookup returned a project, ignoring activity. */
+function recommendStartEnvironment(threads: TodoThreadLink[]): {
+  projectId: string | null;
+  environmentId: string | null;
+} {
+  const chosen = [...threads]
+    .filter((thread) => Boolean(thread.projectId))
+    .sort((left, right) => {
+      const recent = right.linkedAt.localeCompare(left.linkedAt);
+      if (recent !== 0) return recent;
+      return left.threadId.localeCompare(right.threadId);
+    })[0];
+  return {
+    projectId: chosen?.projectId ?? null,
+    environmentId: chosen?.environmentId ?? null,
+  };
+}
+
+function buildStartInstruction(itemId: string, hasThreads: boolean): string {
+  if (!hasThreads) {
+    return `开工第一步先运行 \`bb todo link ${itemId}\` 将本会话绑定到该待办，然后按上面的下一步和备注推进；阶段收口时用 \`bb todo log ${itemId}\` 更新进展。`;
+  }
+  return `开工第一步先运行 \`bb todo link ${itemId}\` 将本会话绑定到该待办；请结合上述 \`@thread:...\` 关联会话的上下文（需要细节时用 \`bb thread log <threadId> --limit 10\` 捞取）继续推进，阶段收口时用 \`bb todo log ${itemId}\` 更新进展。`;
+}
+
+function buildStartPrompt(
+  item: Pick<TodoItem, "id" | "title" | "nextStep" | "notes">,
+  threads: PromptThread[],
+  omittedCount: number,
+): string {
+  const instruction = buildStartInstruction(item.id, threads.length > 0);
+  const assemble = (notesLimit: number, outputLimit: number): string => {
+    const parts: string[] = [`推进待办 ${item.id}：${item.title}`];
+    const nextStep = item.nextStep.trim();
+    if (nextStep.length > 0) parts.push(`下一步：${nextStep}`);
+    const notes = item.notes.trim();
+    if (notes.length > 0 && notesLimit > 0) {
+      const truncated = notes.length > notesLimit;
+      const body = truncated ? notes.slice(0, notesLimit).trimEnd() : notes;
+      parts.push(
+        truncated
+          ? `备注：\n${body}\n（备注已截断，运行 \`bb todo show ${item.id}\` 查看完整备注。）`
+          : `备注：\n${body}`,
+      );
+    } else if (notes.length > 0) {
+      parts.push(`备注已省略，运行 \`bb todo show ${item.id}\` 查看完整备注。`);
+    }
+    if (threads.length > 0) {
+      const lines = ["关联会话：", ...threads.map((thread) => `@thread:${thread.threadId}`)];
+      if (omittedCount > 0) {
+        lines.push(`其余 ${omittedCount} 个关联会话未列入，需要时运行 \`bb todo show ${item.id}\`。`);
+      }
+      parts.push(lines.join("\n"));
+      const clues = threads.flatMap((thread) => {
+        if (!thread.outputTail || outputLimit <= 0) return [];
+        const tail = clipTail(thread.outputTail, outputLimit);
+        return tail.length > 0 ? [`- @thread:${thread.threadId}：${tail}`] : [];
+      });
+      if (clues.length > 0) parts.push(["最近上下文：", ...clues].join("\n"));
+    }
+    return parts.join("\n\n");
+  };
+
+  let notesLimit = START_NOTES_LIMIT;
+  let outputLimit = START_OUTPUT_LIMIT;
+  let body = assemble(notesLimit, outputLimit);
+  while (
+    `${body}\n\n${instruction}`.length > START_PROMPT_LIMIT &&
+    (notesLimit > 0 || outputLimit > 0)
+  ) {
+    if (outputLimit > 0) outputLimit = Math.max(0, outputLimit - 80);
+    else notesLimit = Math.max(0, notesLimit - 80);
+    body = assemble(notesLimit, outputLimit);
+  }
+  const combined = body.length > 0 ? `${body}\n\n${instruction}` : instruction;
+  if (combined.length <= START_PROMPT_LIMIT) return combined;
+  const budget = START_PROMPT_LIMIT - instruction.length - 2;
+  if (budget <= 1) return instruction.slice(0, START_PROMPT_LIMIT);
+  return `${body.slice(0, budget - 1).trimEnd()}…\n\n${instruction}`;
+}
+
 export default function plugin(bb: BbPluginApi): void {
   const db = bb.storage.database();
   bb.storage.migrate(db, [
@@ -267,18 +391,34 @@ export default function plugin(bb: BbPluginApi): void {
       ...new Set(items.flatMap((item) => item.threads.map((thread) => thread.threadId))),
     ];
     if (threadIds.length === 0) return items;
-    const live = new Map<string, { title: string | null; status: string | null }>();
+    const live = new Map<
+      string,
+      {
+        title: string | null;
+        status: string | null;
+        projectId: string | null;
+        environmentId: string | null;
+      }
+    >();
     await Promise.all(
       threadIds.map(async (threadId) => {
         try {
           const thread = await bb.sdk.threads.get({ threadId });
+          const included = "environment" in thread ? thread.environment : null;
           live.set(threadId, {
             title: thread.title || thread.titleFallback || null,
             status: thread.status ?? null,
+            projectId: thread.projectId,
+            environmentId: thread.environmentId ?? included?.id ?? null,
           });
         } catch {
           // A deleted or unreachable thread must not hide the todo itself.
-          live.set(threadId, { title: null, status: null });
+          live.set(threadId, {
+            title: null,
+            status: null,
+            projectId: null,
+            environmentId: null,
+          });
         }
       }),
     );
@@ -290,6 +430,8 @@ export default function plugin(bb: BbPluginApi): void {
           ...thread,
           threadTitle: current?.title ?? null,
           threadStatus: current?.status ?? null,
+          projectId: current?.projectId ?? null,
+          environmentId: current?.environmentId ?? null,
         };
       }),
     }));
@@ -353,23 +495,34 @@ export default function plugin(bb: BbPluginApi): void {
     ).run(seq, text, threadId, timestamp);
   };
 
+  // An empty note only inserts a missing link. It never clears a note that is
+  // already there. Merge passes "fill" so a non-empty source note is copied
+  // only when the target's note is still empty; an explicit link can replace it.
   const linkThreadRow = (
     seq: number,
     threadId: string,
     note: string | undefined,
     timestamp: string,
+    mode: "set" | "fill" = "set",
   ) => {
-    if (note === undefined) {
+    const trimmed = note?.trim() ?? "";
+    const existing = db
+      .prepare("SELECT note FROM todo_threads WHERE item_seq = ? AND thread_id = ?")
+      .get(seq, threadId) as { note: string } | undefined;
+    if (!existing) {
       db.prepare(
-        `INSERT INTO todo_threads (item_seq, thread_id, note, linked_at) VALUES (?, ?, '', ?)
-         ON CONFLICT(item_seq, thread_id) DO NOTHING`,
-      ).run(seq, threadId, timestamp);
+        "INSERT INTO todo_threads (item_seq, thread_id, note, linked_at) VALUES (?, ?, ?, ?)",
+      ).run(seq, threadId, trimmed, timestamp);
       return;
     }
-    db.prepare(
-      `INSERT INTO todo_threads (item_seq, thread_id, note, linked_at) VALUES (?, ?, ?, ?)
-       ON CONFLICT(item_seq, thread_id) DO UPDATE SET note = excluded.note`,
-    ).run(seq, threadId, note, timestamp);
+    if (trimmed.length === 0) return;
+    if (mode === "fill" && existing.note.trim().length > 0) return;
+    if (existing.note === trimmed) return;
+    db.prepare("UPDATE todo_threads SET note = ? WHERE item_seq = ? AND thread_id = ?").run(
+      trimmed,
+      seq,
+      threadId,
+    );
   };
 
   const deleteItemRow = (seq: number): boolean => {
@@ -541,15 +694,25 @@ export default function plugin(bb: BbPluginApi): void {
     const mergedLog = [`Merged inbox proposal: ${source.title}`];
     if (source.proposal_reason) mergedLog.push(`Reason: ${source.proposal_reason}`);
     if (source.notes) mergedLog.push(`Notes: ${source.notes}`);
+    if (source.next_step.trim().length > 0) mergedLog.push(`Next step: ${source.next_step}`);
+    const inheritedNextStep =
+      target.next_step.trim().length === 0 && source.next_step.trim().length > 0
+        ? source.next_step
+        : target.next_step;
     db.transaction(() => {
+      db.prepare("UPDATE todo_logs SET item_seq = ? WHERE item_seq = ?").run(targetSeq, seq);
       insertLog(targetSeq, mergedLog.join("\n"), null, timestamp);
       const linked = db
         .prepare("SELECT thread_id, note, linked_at FROM todo_threads WHERE item_seq = ?")
         .all(seq) as { thread_id: string; note: string; linked_at: string }[];
       for (const link of linked) {
-        linkThreadRow(targetSeq, link.thread_id, link.note, timestamp);
+        linkThreadRow(targetSeq, link.thread_id, link.note, timestamp, "fill");
       }
-      db.prepare("UPDATE todo_items SET updated_at = ? WHERE seq = ?").run(timestamp, targetSeq);
+      db.prepare("UPDATE todo_items SET next_step = ?, updated_at = ? WHERE seq = ?").run(
+        inheritedNextStep,
+        timestamp,
+        targetSeq,
+      );
       deleteItemRow(seq);
     })();
     publishChanged("merged", targetSeq);
@@ -728,6 +891,83 @@ export default function plugin(bb: BbPluginApi): void {
     });
   };
 
+  const prepareStartSession = async (id: string) => {
+    const seq = mustParseId(id);
+    const [item] = await readRows([requireItemRow(seq)]);
+    if (!item) {
+      throw new TodoError(
+        `Todo not found: ${formatTodoId(seq)}`,
+        "not_found",
+        "Run `bb todo list --status all --json` to list ids.",
+      );
+    }
+    const selected = selectPromptThreads(item.threads);
+    const promptThreads = await Promise.all(
+      selected.map(async (thread) => {
+        try {
+          const result = await bb.sdk.threads.output({ threadId: thread.threadId });
+          return {
+            threadId: thread.threadId,
+            outputTail: summarizeThreadOutput(result.output),
+          };
+        } catch {
+          return { threadId: thread.threadId, outputTail: null };
+        }
+      }),
+    );
+    const environment = recommendStartEnvironment(item.threads);
+    return prepareStartSessionOutput.parse({
+      itemId: item.id,
+      title: item.title,
+      projectId: environment.projectId,
+      environmentId: environment.environmentId,
+      initialPrompt: buildStartPrompt(
+        item,
+        promptThreads,
+        item.threads.length - selected.length,
+      ),
+      relatedThreadCount: selected.length,
+    });
+  };
+
+  const startTodoSession = async (
+    id: string,
+    options: { projectId?: string; extraPrompt?: string; fallbackProjectId?: string },
+  ) => {
+    const prepared = await prepareStartSession(id);
+    const projectId =
+      options.projectId?.trim() || prepared.projectId || options.fallbackProjectId?.trim() || "";
+    if (projectId.length === 0) {
+      throw new TodoError(
+        "Starting a session needs a project",
+        "missing_project",
+        "Pass --project <projectId>. A linked thread's project, then the current bb project, are used when set.",
+      );
+    }
+    const extra = options.extraPrompt?.trim() ?? "";
+    const prompt = extra.length > 0 ? `${prepared.initialPrompt}\n\n${extra}` : prepared.initialPrompt;
+    const thread = await bb.sdk.threads.spawn({
+      projectId,
+      environment: { type: "project-default" },
+      title: `${prepared.itemId}: ${prepared.title}`.slice(0, 80),
+      prompt,
+    });
+    const seq = mustParseId(prepared.itemId);
+    const timestamp = now();
+    db.transaction(() => {
+      linkThreadRow(seq, thread.id, undefined, timestamp);
+      insertLog(seq, `已开启会话 ${thread.id}`, thread.id, timestamp);
+      db.prepare("UPDATE todo_items SET updated_at = ? WHERE seq = ?").run(timestamp, seq);
+    })();
+    publishChanged("started", seq);
+    return {
+      threadId: thread.id,
+      projectId,
+      initialPrompt: prompt,
+      item: (await readEnrichedItem(seq))!,
+    };
+  };
+
   bb.rpc.register(rpcContract, {
     listSnapshot: () => listSnapshot(),
     quickAdd: (input) =>
@@ -751,6 +991,7 @@ export default function plugin(bb: BbPluginApi): void {
     linkThread: (input) => linkThread(input),
     unlinkThread: (input) => unlinkThread(input),
     remove: (input) => removeTodo(mustParseId(input.id)),
+    prepareStartSession: (input) => prepareStartSession(input.id),
   });
 
   const reply = (
@@ -1269,6 +1510,41 @@ export default function plugin(bb: BbPluginApi): void {
             });
             const item = await cliCall(() => unlinkThread(input));
             return reply(item, options.json, () => `Unlinked ${item.id} from ${threadId}`);
+          },
+        }),
+
+        start: cliCommand({
+          summary: "Start a new bb thread for a todo and link it",
+          description:
+            "Builds the same prompt as the panel's new-session action, spawns a thread in the chosen project, and links that thread back to the todo.",
+          positionals: [
+            { name: "id", description: "Todo id (T-1, t-1, or 1)", required: true },
+          ],
+          options: {
+            project: {
+              type: "string",
+              description:
+                "Project id. Defaults to the newest linked thread's project, then the current bb project.",
+            },
+            prompt: {
+              type: "string",
+              description: "Extra instruction appended to the generated prompt.",
+            },
+            json: jsonOption,
+          },
+          async run({ positionals, options }, ctx) {
+            const started = await cliCall(() =>
+              startTodoSession(cliTodoId(positionals.id), {
+                projectId: options.project,
+                extraPrompt: options.prompt,
+                fallbackProjectId: ctx.projectId,
+              }),
+            );
+            return reply(
+              started,
+              options.json,
+              () => `Started ${started.threadId} for ${started.item.id} in ${started.projectId}`,
+            );
           },
         }),
 

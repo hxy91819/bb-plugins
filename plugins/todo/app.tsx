@@ -11,6 +11,7 @@ import {
 import {
   TODO_CHANGED_EVENT,
   TODO_FORMAL_BUCKETS,
+  TODO_START_RELATED_LIMIT,
   type TodoCounts,
   type TodoFormalBucket,
   type TodoItem,
@@ -427,6 +428,55 @@ function InboxSection({
   );
 }
 
+function StartSessionButton({
+  item,
+  onError,
+}: {
+  item: TodoItem;
+  onError(message: string): void;
+}) {
+  const rpc = useRpc<typeof rpcContract>();
+  const navigate = useBbNavigate();
+  const [pending, setPending] = useState(false);
+  const carried = Math.min(item.threads.length, TODO_START_RELATED_LIMIT);
+  const hint =
+    carried > 0 ? `开启新会话并带入 ${carried} 个关联会话上下文` : "为此待办开启新会话";
+
+  const start = async () => {
+    if (pending) return;
+    setPending(true);
+    try {
+      const prepared = await rpc.call("prepareStartSession", { id: item.id });
+      navigate.toCompose({
+        focusPrompt: true,
+        initialPrompt: prepared.initialPrompt,
+        ...(prepared.projectId ? { projectId: prepared.projectId } : {}),
+        ...(prepared.environmentId ? { environmentId: prepared.environmentId } : {}),
+      });
+    } catch {
+      onError(`没能为 ${item.id} 开启新会话。`);
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      title={hint}
+      aria-label={`${hint}（${item.id}）`}
+      disabled={pending}
+      onClick={(event) => {
+        event.stopPropagation();
+        void start();
+      }}
+      className="inline-flex shrink-0 cursor-pointer items-center rounded-full border border-border bg-background px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50"
+    >
+      {pending ? "开启中…" : "▶ 新会话"}
+    </button>
+  );
+}
+
 function LogEntry({ log }: { log: TodoLogEntry }) {
   const navigate = useBbNavigate();
   const threadId = log.threadId;
@@ -476,6 +526,20 @@ function TodoDetails({
     nextStep: item.nextStep,
     notes: item.notes,
   });
+  const seenId = useRef(item.id);
+  const draftRef = useRef({ title, bucket, nextStep, notes });
+  draftRef.current = { title, bucket, nextStep, notes };
+
+  const draftIsDirty = (draft: {
+    title: string;
+    bucket: TodoFormalBucket;
+    nextStep: string;
+    notes: string;
+  }) =>
+    draft.title.trim() !== baseline.current.title ||
+    draft.bucket !== baseline.current.bucket ||
+    draft.nextStep !== baseline.current.nextStep ||
+    draft.notes !== baseline.current.notes;
 
   useEffect(() => {
     const next = {
@@ -484,7 +548,25 @@ function TodoDetails({
       nextStep: item.nextStep,
       notes: item.notes,
     };
+    const idChanged = seenId.current !== item.id;
+    seenId.current = item.id;
+    if (idChanged) {
+      baseline.current = next;
+      setTitle(next.title);
+      setBucket(next.bucket);
+      setNextStep(next.nextStep);
+      setNotes(next.notes);
+      setSaved(false);
+      return;
+    }
+    if (draftIsDirty(draftRef.current)) return;
+    const changed =
+      next.title !== baseline.current.title ||
+      next.bucket !== baseline.current.bucket ||
+      next.nextStep !== baseline.current.nextStep ||
+      next.notes !== baseline.current.notes;
     baseline.current = next;
+    if (!changed) return;
     setTitle(next.title);
     setBucket(next.bucket);
     setNextStep(next.nextStep);
@@ -492,11 +574,7 @@ function TodoDetails({
     setSaved(false);
   }, [item.id, item.title, item.bucket, item.nextStep, item.notes, item.updatedAt]);
 
-  const dirty =
-    title.trim() !== baseline.current.title ||
-    bucket !== baseline.current.bucket ||
-    nextStep !== baseline.current.nextStep ||
-    notes !== baseline.current.notes;
+  const dirty = draftIsDirty({ title, bucket, nextStep, notes });
 
   const save = async () => {
     if (saving) return;
@@ -616,6 +694,7 @@ function TodoDetails({
         <span className="text-[11px] text-muted-foreground">
           {saved && !dirty ? "已保存" : "⌘/Ctrl + Enter 保存"}
         </span>
+        <StartSessionButton item={item} onError={onError} />
         <span className="flex-1" />
         <button
           type="button"
@@ -725,6 +804,9 @@ function TodoRow({
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           <ThreadCapsules threads={item.threads} />
+          {item.completedAt === null ? (
+            <StartSessionButton item={item} onError={onError} />
+          ) : null}
           <button
             type="button"
             aria-label={expanded ? `收起 ${item.id} 详情` : `展开 ${item.id} 详情`}

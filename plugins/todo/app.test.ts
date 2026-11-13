@@ -165,6 +165,20 @@ function handlers(store: Store) {
       store.items = store.items.filter((item) => item.id !== input.id);
       return { removed: store.items.length !== before };
     },
+    prepareStartSession: (input: { id: string }) => {
+      const item = store.find(input.id);
+      const thread = item.threads[0];
+      return {
+        itemId: item.id,
+        title: item.title,
+        projectId: thread?.projectId ?? null,
+        environmentId: thread?.environmentId ?? null,
+        initialPrompt: thread
+          ? `推进待办 ${item.id}：${item.title}\n@thread:${thread.threadId}`
+          : `推进待办 ${item.id}：${item.title}`,
+        relatedThreadCount: Math.min(item.threads.length, 5),
+      };
+    },
   };
 }
 
@@ -485,6 +499,132 @@ test("导航角标优先提示 inbox，其次 focus，realtime 刷新且异常�
     store.failSnapshot = true;
     await slot.behavior.emitRealtime(TODO_CHANGED_EVENT, {});
     await waitFor(() => assert.equal(readBadge(), null));
+  } finally {
+    slot.lifecycle.unmount();
+  }
+});
+
+test("未修改的详情跟上服务端字段，编辑中的草稿不被 realtime 冲掉", async () => {
+  const store = new Store();
+  store.add({ title: "写前端", nextStep: "旧下一步", notes: "旧备注" });
+  const slot = await mountedPanel(store);
+  try {
+    await slot.findByText("写前端");
+    fireEvent.click(slot.getByText("写前端"));
+    const nextStep = () => slot.getByLabelText("下一步 T-1") as HTMLInputElement;
+    const title = () => slot.getByLabelText("标题 T-1") as HTMLInputElement;
+    assert.equal(nextStep().value, "旧下一步");
+
+    const item = store.find("T-1");
+    item.nextStep = "服务端下一步";
+    item.updatedAt = "2026-11-13T10:00:01.000Z";
+    await slot.behavior.emitRealtime(TODO_CHANGED_EVENT, {});
+    await waitFor(() => {
+      if (nextStep().value !== "服务端下一步") throw new Error(nextStep().value);
+    });
+
+    fireEvent.change(nextStep(), { target: { value: "草稿下一步" } });
+    item.title = "服务端新标题";
+    item.nextStep = "服务端又改了下一步";
+    item.notes = "服务端备注";
+    item.updatedAt = "2026-11-13T10:00:02.000Z";
+    item.logs = [{ id: 7, text: "后台写入的日志", threadId: "thr-bg", createdAt }];
+    item.threads = [
+      {
+        threadId: "thr-bg",
+        note: "",
+        linkedAt: createdAt,
+        threadTitle: "后台会话",
+        threadStatus: "active",
+      },
+    ];
+    await slot.behavior.emitRealtime(TODO_CHANGED_EVENT, {});
+    await slot.findByText("后台写入的日志");
+    await slot.findByRole("button", { name: "打开会话 后台会话" });
+    assert.equal(nextStep().value, "草稿下一步");
+    assert.equal(title().value, "写前端");
+    assert.equal((slot.getByLabelText("备注 T-1") as HTMLTextAreaElement).value, "旧备注");
+  } finally {
+    slot.lifecycle.unmount();
+  }
+});
+
+test("未完成正式待办的新会话按钮把 prepareStartSession 送进作曲栏", async () => {
+  const store = new Store();
+  store.add({
+    title: "继续做",
+    threads: [
+      {
+        threadId: "thr-old",
+        note: "",
+        linkedAt: createdAt,
+        threadTitle: "旧会话",
+        threadStatus: "idle",
+        projectId: "proj-1",
+        environmentId: "env-1",
+      },
+    ],
+  });
+  store.add({ title: "提议", bucket: "inbox", proposalReason: "来自纪要" });
+  store.add({ title: "做完了", completedAt: "2026-11-13T12:00:00.000Z" });
+  store.add({ title: "全新", bucket: "later" });
+  const slot = await mountedPanel(store);
+  try {
+    await slot.findByText("继续做");
+    assert.equal(slot.queryByRole("button", { name: /开启新会话.*T-2/ }), null);
+    assert.equal(slot.queryByRole("button", { name: /开启新会话.*T-3/ }), null);
+    const openButtons = slot.getAllByRole("button", { name: /开启新会话/ });
+    assert.equal(openButtons.length, 2);
+    assert.equal(
+      slot.getByRole("button", { name: "开启新会话并带入 1 个关联会话上下文（T-1）" }).getAttribute("title"),
+      "开启新会话并带入 1 个关联会话上下文",
+    );
+
+    fireEvent.click(slot.getByRole("button", { name: "开启新会话并带入 1 个关联会话上下文（T-1）" }));
+    await waitFor(() => {
+      if (slot.inspection.navigateCalls.at(-1)?.method !== "toCompose") {
+        throw new Error("compose not opened");
+      }
+    });
+    assert.deepEqual(slot.inspection.rpcCalls.find((call) => call.method === "prepareStartSession"), {
+      method: "prepareStartSession",
+      input: { id: "T-1" },
+    });
+    assert.deepEqual(slot.inspection.navigateCalls.at(-1), {
+      method: "toCompose",
+      options: {
+        focusPrompt: true,
+        initialPrompt: "推进待办 T-1：继续做\n@thread:thr-old",
+        projectId: "proj-1",
+        environmentId: "env-1",
+      },
+    });
+
+    fireEvent.click(slot.getByText("继续做"));
+    const detailButtons = slot.getAllByRole("button", {
+      name: "开启新会话并带入 1 个关联会话上下文（T-1）",
+    });
+    assert.equal(detailButtons.length, 2);
+    fireEvent.click(detailButtons[1]);
+    await waitFor(() => {
+      if (slot.inspection.navigateCalls.length < 2) throw new Error("detail compose missing");
+    });
+    assert.equal(slot.inspection.navigateCalls.at(-1)?.method, "toCompose");
+
+    fireEvent.click(slot.getByRole("button", { name: "为此待办开启新会话（T-4）" }));
+    await waitFor(() => {
+      const call = slot.inspection.navigateCalls.at(-1);
+      if (call?.method !== "toCompose" || call.options?.projectId !== undefined) {
+        throw new Error("plain compose missing");
+      }
+    });
+    assert.deepEqual(slot.inspection.navigateCalls.at(-1), {
+      method: "toCompose",
+      options: {
+        focusPrompt: true,
+        initialPrompt: "推进待办 T-4：全新",
+      },
+    });
   } finally {
     slot.lifecycle.unmount();
   }

@@ -17,8 +17,9 @@ for agent proposals, inline row details, and a collapsed completed drawer.
 
 Ids are `T-<seq>` for the SQLite autoincrement primary key. Input accepts
 `T-1`, `t-1`, or `1`. `logs` are newest first. `threads` are enriched with the
-live bb thread title and status; a deleted or unreachable thread keeps its
-`threadId` and gets `threadTitle: null` / `threadStatus: null`.
+live bb thread title, status, `projectId`, and `environmentId` (`environmentId`
+falls back to the included environment id). A deleted or unreachable thread
+keeps its `threadId` and gets null title, status, project, and environment.
 
 `sortOrder` breaks ties inside a bucket (ascending), then `seq`. Inbox proposals
 are newest first; completed todos are newest completion first.
@@ -35,6 +36,7 @@ bb todo list --status inbox --json
 bb todo show T-1 --json
 bb todo log T-1 "Reviewed storage schema" --next-step "Write tests"
 bb todo link T-1 --note "implementation thread"
+bb todo start T-1 --prompt "先看失败的测试"
 bb todo scan --json
 ```
 
@@ -51,6 +53,14 @@ the latest log, linked threads, `hasRunningThread`, and `actionable`
 `propose` and leave the inbox only through `triage`; `update` and `done` reject
 inbox items.
 
+`bb todo start <id>` builds the same prompt as the panel action, spawns a
+thread with `project-default`, and links that thread back to the todo. The
+project is `--project`, else the newest linked thread that still has a project,
+else the current bb project. `--prompt` is appended after the generated text. Merging
+an inbox item moves its existing logs onto the target and, when the target
+`next step` is empty, copies the source `next step`. An empty thread note never
+replaces a note already stored on the target.
+
 ## Panel
 
 `app.tsx` registers the `todo` navigation panel at `/plugins/todo/todo`. The
@@ -65,9 +75,15 @@ repeats the page title.
   (including a bucket selector), merge into an open formal todo, or dismiss.
 - **Rows**: the round checkbox completes a todo; the row expands inline to edit
   title, bucket, next step, and notes, with `⌘/Ctrl + Enter` or the Save button.
-  Expanded rows also show agent progress logs and a delete button. Thread
-  capsules (running ones carry a dot) and log thread ids navigate to the linked
-  BB thread.
+  Expanded rows also show agent progress logs, a delete button, and the same
+  new-session control. Thread capsules (running ones carry a dot) and log
+  thread ids navigate to the linked BB thread. Unsaved edits in the open
+  details stay put when a realtime refresh arrives; a clean form follows the
+  server fields. Logs and thread capsules keep updating either way.
+- **New session**: each open formal row has a `▶ 新会话` pill. It asks
+  `prepareStartSession` for a prompt that quotes up to five linked
+  `@thread:` ids, then opens the composer with that draft and, when known, the
+  linked project and environment.
 - **Completed**: the bottom `已完成 (N)` drawer starts collapsed and restores a
   todo when its filled checkbox is clicked. The snapshot carries the 20 most
   recent completed items.
@@ -83,8 +99,9 @@ is therefore not registered. Revisit when the host SDK exposes that slot.
 
 `contract.ts` is the single authority for types, RPC names, and the realtime
 channel. Methods: `listSnapshot`, `quickAdd`, `update`, `setCompleted`,
-`triageInbox`, `addLog`, `linkThread`, `unlinkThread`, `remove`. Every
-successful write publishes `todo:changed` on `bb.realtime`.
+`triageInbox`, `addLog`, `linkThread`, `unlinkThread`, `remove`,
+`prepareStartSession`. Every successful write publishes `todo:changed` on
+`bb.realtime`. `prepareStartSession` does not write; `bb todo start` does.
 
 `listSnapshot` returns `buckets` (`focus`, `later`, `waiting`, `inbox`), the 20
 most recently completed `done` items, and `counts` for sidebar badges.
