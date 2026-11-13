@@ -55,8 +55,38 @@ Add `--json` for machine-readable output. Buckets are `focus`, `later`,
    run `bb todo scan --json`. Prefer items with `actionable: true` (unfinished,
    not `waiting`, and with no linked thread currently `starting` or `active`),
    especially `focus` before `later`. Run `bb todo link <id>` to bind the current
-   session before starting, then record progress with `bb todo log` and close
-   the item with `bb todo done`.
+   session before starting, then record progress with `bb todo log`. Close the
+   item with `bb todo done` only when the graded-autonomy rule below says the
+   completion is a fact; otherwise suggest it.
+
+## Graded autonomy
+
+Two levels. Do not ask the user to confirm work that is already a fact, and do
+not write a judgment straight into the list.
+
+1. **Certain, factual writes happen immediately.** Bind the current session
+   with `bb todo link`, append an objective progress log with `bb todo log`,
+   and when a deliverable already has a closed merge or release check with no
+   leftover follow-up, complete it with
+   `bb todo done <id> --note "..."`. Those writes land in revision history, so
+   the user can undo them from the panel or with `bb todo undo`.
+2. **Anything that still takes judgment goes to the suggestion queue.** The
+   user confirms it in the panel (or with `bb todo decide`). Do not `update`
+   or `done` these yourself:
+   - It looks finished, but a walkthrough or polish pass might remain:
+     `bb todo suggest <id> --done --reason "依据..." --thread <thr_xxx>`
+   - A `later` item has recent real progress and should move, be retitled, or
+     be refiled:
+     `bb todo suggest <id> --bucket focus --reason "依据..." --thread <thr_xxx>`
+   - A meeting note or conversation introduces a new deliverable:
+     `bb todo propose "标题" --list "..." --section "..." --reason "依据..."`
+
+`bb todo suggest` does not change the todo. One pending card is kept per todo
+and kind (`complete` or `update`); a repeat updates that card instead of
+stacking another. Pass every evidence thread with `--thread` (repeatable, or
+comma-separated). With no `--thread`, the current BB thread is attached unless
+`--no-link` is set. `--reason` is required. Accepting a card applies it and
+writes a revision, so a mistaken accept can be undone.
 
 ## Start a session
 
@@ -80,6 +110,9 @@ thread; do not treat a missing link as an error if `bb todo show <id>` lists it.
 - `bb todo show <id> [--json]`
 - `bb todo add <title> [--bucket focus|later|waiting] [--list <name>] [--section <name>] [--notes <text>] [--link-current] [--json]`
 - `bb todo propose <title> --reason <text> [--list <name>] [--section <name>] [--notes <text>] [--link-current] [--json]`
+- `bb todo suggest <id> --reason <text> [--done] [--bucket focus|later|waiting] [--title <text>] [--list <name>] [--section <name>] [--notes-append <text>] [--thread <threadId>]... [--no-link] [--json]`
+- `bb todo suggestions [--json]`
+- `bb todo decide <S-id> --accept|--dismiss [--json]`
 - `bb todo triage <id> --action accept|merge|dismiss [--bucket focus|later|waiting] [--into <target-id>] [--list <name>] [--section <name>] [--json]`
 - `bb todo log <id> <text> [--no-link] [--json]`
 - `bb todo link <id> [--thread <threadId>] [--note <text>] [--json]`
@@ -110,5 +143,7 @@ undone, including a merged-away proposal and the target it was merged into.
 Pass a revision number to undo that one instead. Do not undo just to tidy
 history; undo when a write was wrong.
 
-Only accept, merge, or dismiss an inbox proposal when the user asks; proposals
-exist so a human can veto new workstreams.
+Only accept, merge, or dismiss an inbox proposal or an `S-` suggestion when the
+user asks. `bb todo decide` and the panel are the user's confirmation;
+suggestions and proposals exist so a human can veto judgment calls. A direct
+`bb todo done` is still right for the factual case in Graded autonomy.

@@ -140,9 +140,17 @@ repeats the page title.
   recent completed items.
 - **History**: `最近变更（可撤销）` lists recent revisions and can undo one
   that has not already been undone.
-- **Badge**: the navigation badge prefers `inbox` proposals (`warning`), then
-  `focus` items (`neutral`). It refreshes on `todo:changed` and falls back to
-  no badge if the snapshot cannot be loaded.
+- **Agent suggestions**: pending `S-` suggestions and inbox proposals share one
+  `Agent 建议` block. It is hidden when both are empty, and a list filter keeps
+  only cards that belong to that list or would move into it. Each card shows
+  the action, the reason, and clickable evidence-thread capsules. Accept
+  applies the change and writes a revision; dismiss leaves the todo alone.
+  `全部采纳` accepts the visible cards when there are at least two. A formal row
+  with a pending suggestion shows a small `有建议` hint.
+- **Badge**: the navigation badge counts inbox proposals plus pending
+  suggestions (`warning`, `N 项 Agent 建议`). With none pending it falls back to
+  open `focus` items (`neutral`). It refreshes on `todo:changed` and shows no
+  badge if the snapshot cannot be loaded.
 
 SDK 0.6.75 does not export `experimental_threadContextCardRow` or
 `experimental_ThreadContextCardRow`; the optional read-only thread context row
@@ -153,19 +161,25 @@ is therefore not registered. Revisit when the host SDK exposes that slot.
 `contract.ts` is the single authority for types, RPC names, and the realtime
 channel. Methods: `listSnapshot`, `quickAdd`, `update`, `setCompleted`,
 `triageInbox`, `addLog`, `linkThread`, `unlinkThread`, `remove`,
-`prepareStartSession`, `setListColor`, `listRevisions`, `undoRevision`.
+`prepareStartSession`, `setListColor`, `listRevisions`, `undoRevision`,
+`suggest`, `resolveSuggestion`, `acceptAllSuggestions`.
 Every successful write publishes `todo:changed` on `bb.realtime`.
 `prepareStartSession` does not write; `bb todo start` does.
 
 `listSnapshot` returns `buckets` (`focus`, `later`, `waiting`, `inbox`), the 20
-most recently completed `done` items, `counts` for sidebar badges, and `lists`
-(`name`, `color`, `openCount`, `sections`) for named lists that still have open
-formal todos.
+most recently completed `done` items, pending `suggestions` (`S-` ids, the
+target todo, the patch, the reason, and enriched evidence threads), `counts`
+for sidebar badges (including `suggestions`), and `lists` (`name`, `color`,
+`openCount`, `sections`) for named lists that still have open formal todos.
 
 ## Storage
 
 Migrations create `todo_items`, `todo_threads`, and `todo_logs`, then
-`todo_list_meta` and `todo_revisions`. `list_name`, `section_name`, and
+`todo_list_meta`, `todo_revisions`, and `todo_suggestions`. A repeated
+`suggest` for the same todo and kind updates the pending row in place.
+Deleting a todo dismisses its pending suggestions. Manually completing a todo
+dismisses a pending completion suggestion. Accepting a suggestion writes a
+`suggestion_accept` revision; undo restores the todo and reopens that card. `list_name`, `section_name`, and
 `deleted_at` are added with `PRAGMA table_info` so an existing database is not
 altered twice. The retired physical column `next_step TEXT NOT NULL DEFAULT ''`
 stays in place so existing local databases keep opening; on startup every

@@ -22,20 +22,27 @@ import {
   TODO_TITLE_MAX_LENGTH,
   addTodoLogInput,
   fallbackTodoColor,
+  acceptAllSuggestionsInput,
+  formatSuggestionId,
   formatTodoId,
   linkTodoThreadInput,
+  parseSuggestionId,
   parseTodoId,
   prepareStartSessionOutput,
   quickAddInput,
+  resolveSuggestionInput,
   resolveTodoPlacement,
   rpcContract,
   setTodoCompletedInput,
+  suggestTodoInput,
   todoColorSchema,
   todoCountsSchema,
   todoListSummarySchema,
   todoRevisionSchema,
   todoScanResultSchema,
   todoSnapshotSchema,
+  todoSuggestionPatchSchema,
+  todoSuggestionSchema,
   triageInboxInput,
   unlinkTodoThreadInput,
   updateTodoInput,
@@ -51,6 +58,9 @@ import {
   type TodoRevisionAction,
   type TodoScanResult,
   type TodoSnapshot,
+  type TodoSuggestion,
+  type TodoSuggestionKind,
+  type TodoSuggestionPatch,
   type TodoThreadLink,
   type TriageAction,
 } from "./contract";
@@ -104,6 +114,19 @@ type LogRow = {
   text: string;
   thread_id: string | null;
   created_at: string;
+};
+
+type SuggestionRow = {
+  id: number;
+  item_seq: number;
+  kind: TodoSuggestionKind;
+  patch_json: string;
+  reason: string;
+  evidence_threads_json: string;
+  status: "pending" | "accepted" | "dismissed";
+  actor: string;
+  created_at: string;
+  resolved_at: string | null;
 };
 
 const escapeLikePattern = (value: string) => value.replace(/[\\%_]/g, "\\$&");
@@ -187,6 +210,77 @@ type UpdateTodoValues = {
   sectionName?: string;
   sortOrder?: number;
 };
+
+function parseEvidenceIds(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return [
+      ...new Set(
+        parsed
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.trim())
+          .filter((value) => value.length > 0),
+      ),
+    ];
+  } catch {
+    return [];
+  }
+}
+
+function parseStoredPatch(raw: string): TodoSuggestionPatch {
+  try {
+    const parsed = todoSuggestionPatchSchema.safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Keep only fields that differ from the live todo, so one card describes a real change. */
+function changedUpdatePatch(row: ItemRow, patch: TodoSuggestionPatch): TodoSuggestionPatch {
+  const next: TodoSuggestionPatch = {};
+  if (patch.title !== undefined && patch.title !== row.title) next.title = patch.title;
+  if (patch.bucket !== undefined && patch.bucket !== row.bucket) next.bucket = patch.bucket;
+  if (patch.listName !== undefined && patch.listName !== row.list_name) next.listName = patch.listName;
+  if (patch.sectionName !== undefined && patch.sectionName !== row.section_name) {
+    next.sectionName = patch.sectionName;
+  }
+  if (patch.notesAppend !== undefined) {
+    const text = patch.notesAppend.trim();
+    if (text.length > 0 && !row.notes.includes(text)) next.notesAppend = text;
+  }
+  return next;
+}
+
+function suggestionAcceptLog(row: ItemRow, kind: TodoSuggestionKind, patch: TodoSuggestionPatch): string {
+  if (kind === "complete") {
+    const note = patch.completionNote?.trim() ?? "";
+    return note.length > 0 ? note : "采纳建议：标记完成";
+  }
+  const bits: string[] = [];
+  if (patch.bucket) bits.push(`${row.bucket} → ${patch.bucket}`);
+  if (patch.title) bits.push(`标题 ${patch.title}`);
+  if (patch.listName !== undefined || patch.sectionName !== undefined) {
+    const list = patch.listName ?? row.list_name;
+    const section = patch.sectionName ?? row.section_name;
+    const place = [list, section].filter((part) => part.length > 0).join(" / ");
+    bits.push(place.length > 0 ? `列表 ${place}` : "列表 未归类");
+  }
+  if (patch.notesAppend) bits.push("追加备注");
+  const text = `采纳建议：${bits.join("，") || "更新"}`;
+  return text.length > TODO_LOG_TEXT_MAX_LENGTH ? text.slice(0, TODO_LOG_TEXT_MAX_LENGTH) : text;
+}
+
+function suggestionMatchesList(
+  currentList: string,
+  nextList: string | undefined,
+  filter: string | undefined,
+): boolean {
+  if (filter === undefined) return true;
+  if (nextList !== undefined && nextList === filter) return true;
+  return currentList === filter;
+}
 
 function revisionActor(ctx?: { threadId?: string }): string {
   const threadId = ctx?.threadId?.trim() || process.env.BB_THREAD_ID?.trim() || "";
@@ -369,6 +463,19 @@ export default function plugin(bb: BbPluginApi): void {
       created_at TEXT NOT NULL
     )`,
     `CREATE INDEX IF NOT EXISTS todo_revisions_item ON todo_revisions(item_seq, rev DESC)`,
+    `CREATE TABLE IF NOT EXISTS todo_suggestions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_seq INTEGER NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('complete', 'update')),
+      patch_json TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      evidence_threads_json TEXT NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'dismissed')),
+      actor TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      resolved_at TEXT
+    )`,
+    `CREATE INDEX IF NOT EXISTS todo_suggestions_pending ON todo_suggestions(status, item_seq, kind)`,
   ]);
 
   const columnNames = (table: string): Set<string> =>
@@ -487,11 +594,7 @@ export default function plugin(bb: BbPluginApi): void {
     );
   };
 
-  const enrichThreads = async (items: TodoItem[]): Promise<TodoItem[]> => {
-    const threadIds = [
-      ...new Set(items.flatMap((item) => item.threads.map((thread) => thread.threadId))),
-    ];
-    if (threadIds.length === 0) return items;
+  const lookupThreads = async (threadIds: string[]) => {
     const live = new Map<
       string,
       {
@@ -523,6 +626,15 @@ export default function plugin(bb: BbPluginApi): void {
         }
       }),
     );
+    return live;
+  };
+
+  const enrichThreads = async (items: TodoItem[]): Promise<TodoItem[]> => {
+    const threadIds = [
+      ...new Set(items.flatMap((item) => item.threads.map((thread) => thread.threadId))),
+    ];
+    if (threadIds.length === 0) return items;
+    const live = await lookupThreads(threadIds);
     return items.map((item) => ({
       ...item,
       threads: item.threads.map((thread) => {
@@ -764,9 +876,16 @@ export default function plugin(bb: BbPluginApi): void {
     const selfAddedLogIds: number[] = [];
     for (const bundle of beforeBundles) {
       upsertItemRow(bundle);
-      if (action === "complete" || action === "triage_accept") {
+      if (action === "complete" || action === "triage_accept" || action === "suggestion_accept") {
         const afterBundle = after?.find((candidate) => candidate.item.seq === bundle.item.seq);
         selfAddedLogIds.push(...addedLogIds(afterBundle, bundle));
+        if (action === "suggestion_accept" && afterBundle) {
+          const beforeThreadIds = new Set(bundle.threads.map((thread) => thread.thread_id));
+          const addedThreadIds = afterBundle.threads
+            .filter((thread) => !beforeThreadIds.has(thread.thread_id))
+            .map((thread) => thread.thread_id);
+          deleteItemThreads(bundle.item.seq, addedThreadIds);
+        }
       }
     }
     deleteLogsById(selfAddedLogIds);
@@ -866,7 +985,26 @@ export default function plugin(bb: BbPluginApi): void {
     return item ?? null;
   };
 
+  /** Drop pending suggestions whose target was deleted, or completion suggestions already checked off. */
+  const expireStaleSuggestions = (timestamp = now()) => {
+    db.prepare(
+      `UPDATE todo_suggestions
+       SET status = 'dismissed', resolved_at = ?
+       WHERE status = 'pending' AND item_seq NOT IN (
+         SELECT seq FROM todo_items WHERE deleted_at IS NULL
+       )`,
+    ).run(timestamp);
+    db.prepare(
+      `UPDATE todo_suggestions
+       SET status = 'dismissed', resolved_at = ?
+       WHERE status = 'pending' AND kind = 'complete' AND item_seq IN (
+         SELECT seq FROM todo_items WHERE deleted_at IS NULL AND completed_at IS NOT NULL
+       )`,
+    ).run(timestamp);
+  };
+
   const countOpenByBucket = (): TodoCounts => {
+    expireStaleSuggestions();
     const grouped = db
       .prepare(
         `SELECT bucket, count(*) AS total FROM todo_items WHERE completed_at IS NULL AND ${activeSql} GROUP BY bucket`,
@@ -879,6 +1017,9 @@ export default function plugin(bb: BbPluginApi): void {
     const doneRow = db
       .prepare(`SELECT count(*) AS total FROM todo_items WHERE completed_at IS NOT NULL AND ${activeSql}`)
       .get() as { total: number };
+    const suggestionRow = db
+      .prepare(`SELECT count(*) AS total FROM todo_suggestions WHERE status = 'pending'`)
+      .get() as { total: number };
     return todoCountsSchema.parse({
       inbox: byBucket.get("inbox") ?? 0,
       focus,
@@ -886,6 +1027,7 @@ export default function plugin(bb: BbPluginApi): void {
       waiting,
       open: focus + later + waiting,
       done: Number(doneRow.total),
+      suggestions: Number(suggestionRow.total),
     });
   };
 
@@ -1063,6 +1205,10 @@ export default function plugin(bb: BbPluginApi): void {
             seq,
           );
           if (note) insertLog(seq, note, null, timestamp);
+          db.prepare(
+            `UPDATE todo_suggestions SET status = 'dismissed', resolved_at = ?
+             WHERE status = 'pending' AND kind = 'complete' AND item_seq = ?`,
+          ).run(timestamp, seq);
           writeRevision({
             seq,
             action: "complete",
@@ -1276,6 +1422,10 @@ export default function plugin(bb: BbPluginApi): void {
     db.transaction(() => {
       const before = captureBundle(seq);
       softDelete(seq, timestamp);
+      db.prepare(
+        `UPDATE todo_suggestions SET status = 'dismissed', resolved_at = ?
+         WHERE status = 'pending' AND item_seq = ?`,
+      ).run(timestamp, seq);
       writeRevision({
         seq,
         action: "delete",
@@ -1346,7 +1496,351 @@ export default function plugin(bb: BbPluginApi): void {
     return readRows(rows);
   };
 
+  const suggestionById = (id: number): SuggestionRow | undefined =>
+    db
+      .prepare(
+        `SELECT id, item_seq, kind, patch_json, reason, evidence_threads_json, status, actor, created_at, resolved_at
+         FROM todo_suggestions WHERE id = ?`,
+      )
+      .get(id) as SuggestionRow | undefined;
+
+  const readPendingSuggestions = async (): Promise<TodoSuggestion[]> => {
+    expireStaleSuggestions();
+    const rows = db
+      .prepare(
+        `SELECT s.id, s.item_seq, s.kind, s.patch_json, s.reason, s.evidence_threads_json,
+                s.status, s.actor, s.created_at, s.resolved_at,
+                i.title AS item_title, i.bucket AS item_bucket, i.list_name, i.section_name
+         FROM todo_suggestions s
+         JOIN todo_items i ON i.seq = s.item_seq
+         WHERE s.status = 'pending' AND i.deleted_at IS NULL
+         ORDER BY s.created_at DESC, s.id DESC`,
+      )
+      .all() as (SuggestionRow & {
+      item_title: string;
+      item_bucket: TodoBucket;
+      list_name: string;
+      section_name: string;
+    })[];
+    const evidenceById = new Map<number, string[]>();
+    const threadIds = new Set<string>();
+    for (const row of rows) {
+      const ids = parseEvidenceIds(row.evidence_threads_json);
+      evidenceById.set(row.id, ids);
+      for (const threadId of ids) threadIds.add(threadId);
+    }
+    const live = await lookupThreads([...threadIds]);
+    return rows.map((row) => {
+      const evidenceIds = evidenceById.get(row.id) ?? [];
+      return todoSuggestionSchema.parse({
+        id: formatSuggestionId(row.id),
+        seq: row.id,
+        itemSeq: row.item_seq,
+        itemId: formatTodoId(row.item_seq),
+        itemTitle: row.item_title,
+        currentBucket: row.item_bucket,
+        currentListName: row.list_name,
+        currentSectionName: row.section_name,
+        kind: row.kind,
+        patch: parseStoredPatch(row.patch_json),
+        reason: row.reason,
+        evidenceThreads: evidenceIds.map((threadId) => {
+          const current = live.get(threadId);
+          return {
+            threadId,
+            note: "",
+            linkedAt: row.created_at,
+            threadTitle: current?.title ?? null,
+            threadStatus: current?.status ?? null,
+            projectId: current?.projectId ?? null,
+            environmentId: current?.environmentId ?? null,
+          };
+        }),
+        status: row.status,
+        actor: row.actor,
+        createdAt: row.created_at,
+        resolvedAt: row.resolved_at,
+      });
+    });
+  };
+
+  const requirePendingSuggestion = (rawId: string): SuggestionRow => {
+    const seq = parseSuggestionId(rawId);
+    if (seq === null) {
+      throw new TodoError(
+        `Invalid suggestion id: ${rawId}`,
+        "invalid_id",
+        "Use a suggestion id like S-1, s-1, or 1.",
+      );
+    }
+    expireStaleSuggestions();
+    const row = suggestionById(seq);
+    if (!row || row.status !== "pending") {
+      throw new TodoError(
+        `Suggestion not found: ${formatSuggestionId(seq)}`,
+        "not_found",
+        "Run `bb todo suggestions` to list pending suggestions.",
+      );
+    }
+    return row;
+  };
+
+  const applySuggestion = (suggestion: SuggestionRow, actor: string, timestamp: string) => {
+    const row = requireItemRow(suggestion.item_seq);
+    if (suggestion.kind === "complete" && row.completed_at !== null) {
+      throw new TodoError(
+        `${formatTodoId(row.seq)} is already completed`,
+        "already_completed",
+        "The completion suggestion is no longer applicable.",
+      );
+    }
+    const patch = parseStoredPatch(suggestion.patch_json);
+    const evidence = parseEvidenceIds(suggestion.evidence_threads_json);
+    const before = captureBundle(row.seq);
+    if (suggestion.kind === "complete") {
+      db.prepare("UPDATE todo_items SET completed_at = ?, updated_at = ? WHERE seq = ?").run(
+        timestamp,
+        timestamp,
+        row.seq,
+      );
+    } else {
+      const fields: string[] = [];
+      const values: (string | number)[] = [];
+      if (patch.title !== undefined) {
+        fields.push("title = ?");
+        values.push(patch.title);
+      }
+      if (patch.bucket !== undefined) {
+        fields.push("bucket = ?");
+        values.push(patch.bucket);
+      }
+      if (patch.listName !== undefined) {
+        fields.push("list_name = ?");
+        values.push(patch.listName);
+      }
+      if (patch.sectionName !== undefined) {
+        fields.push("section_name = ?");
+        values.push(patch.sectionName);
+      }
+      if (patch.notesAppend !== undefined) {
+        fields.push("notes = ?");
+        values.push(appendToNotes(row.notes, patch.notesAppend));
+      }
+      fields.push("updated_at = ?");
+      values.push(timestamp);
+      db.prepare(`UPDATE todo_items SET ${fields.join(", ")} WHERE seq = ?`).run(...values, row.seq);
+      const nextList = patch.listName ?? row.list_name;
+      if (nextList.length > 0) ensureListColor(nextList);
+    }
+    insertLog(row.seq, suggestionAcceptLog(row, suggestion.kind, patch), evidence[0] ?? null, timestamp);
+    for (const threadId of evidence) linkThreadRow(row.seq, threadId, undefined, timestamp);
+    const suggestionId = formatSuggestionId(suggestion.id);
+    writeRevision({
+      seq: row.seq,
+      action: "suggestion_accept",
+      actor,
+      summary:
+        suggestion.kind === "complete"
+          ? `采纳建议 ${suggestionId}：完成 ${formatTodoId(row.seq)}`
+          : `采纳建议 ${suggestionId}：更新 ${formatTodoId(row.seq)}${clipQuote(patch.title ?? row.title)}`,
+      before: before ? [before] : null,
+      after: [captureBundle(row.seq)!],
+      timestamp,
+    });
+    db.prepare("UPDATE todo_suggestions SET status = 'accepted', resolved_at = ? WHERE id = ?").run(
+      timestamp,
+      suggestion.id,
+    );
+  };
+
+  const suggestTodo = async (
+    input: z.infer<typeof suggestTodoInput>,
+    actor: string,
+  ): Promise<TodoSuggestion> => {
+    const seq = mustParseId(input.id);
+    const row = requireItemRow(seq);
+    if (row.bucket === "inbox") {
+      throw new TodoError(
+        `${formatTodoId(seq)} is an inbox proposal`,
+        "not_suggestable",
+        "Suggestions modify an accepted todo. Triage this proposal with `bb todo triage`.",
+      );
+    }
+    if (input.kind === "complete" && row.completed_at !== null) {
+      throw new TodoError(
+        `${formatTodoId(seq)} is already completed`,
+        "already_completed",
+        "Reopen it before suggesting completion again.",
+      );
+    }
+    const evidence = [
+      ...new Set(input.evidenceThreadIds.map((threadId) => threadId.trim()).filter((threadId) => threadId.length > 0)),
+    ];
+    const patch: TodoSuggestionPatch =
+      input.kind === "complete"
+        ? input.patch.completionNote
+          ? { completionNote: input.patch.completionNote }
+          : {}
+        : changedUpdatePatch(row, input.patch);
+    if (input.kind === "update" && Object.keys(patch).length === 0) {
+      throw new TodoError(
+        "Update suggestion does not change the todo",
+        "empty_patch",
+        "Pass a title, bucket, list, section, or notes append that differs from the current todo.",
+      );
+    }
+    const timestamp = now();
+    const suggestionSeq = db.transaction(() => {
+      expireStaleSuggestions(timestamp);
+      const existing = db
+        .prepare(
+          `SELECT id FROM todo_suggestions WHERE item_seq = ? AND kind = ? AND status = 'pending'`,
+        )
+        .get(seq, input.kind) as { id: number } | undefined;
+      if (existing) {
+        db.prepare(
+          `UPDATE todo_suggestions
+           SET patch_json = ?, reason = ?, evidence_threads_json = ?, created_at = ?
+           WHERE id = ?`,
+        ).run(JSON.stringify(patch), input.reason, JSON.stringify(evidence), timestamp, existing.id);
+        return existing.id;
+      }
+      const inserted = db
+        .prepare(
+          `INSERT INTO todo_suggestions
+            (item_seq, kind, patch_json, reason, evidence_threads_json, status, actor, created_at, resolved_at)
+           VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, NULL)`,
+        )
+        .run(
+          seq,
+          input.kind,
+          JSON.stringify(patch),
+          input.reason,
+          JSON.stringify(evidence),
+          actor,
+          timestamp,
+        );
+      return Number(inserted.lastInsertRowid);
+    })();
+    publishChanged("suggested", seq);
+    const suggestion = (await readPendingSuggestions()).find((item) => item.seq === suggestionSeq);
+    if (!suggestion) {
+      throw new TodoError("Suggestion disappeared after save", "not_found", "Run `bb todo suggestions`.");
+    }
+    return suggestion;
+  };
+
+  const resolveSuggestion = async (
+    input: z.infer<typeof resolveSuggestionInput>,
+    actor: string,
+  ): Promise<{ id: string; decision: "accept" | "dismiss"; item: TodoItem | null }> => {
+    const suggestion = requirePendingSuggestion(input.id);
+    const publicId = formatSuggestionId(suggestion.id);
+    if (input.decision === "dismiss") {
+      const timestamp = now();
+      db.prepare("UPDATE todo_suggestions SET status = 'dismissed', resolved_at = ? WHERE id = ?").run(
+        timestamp,
+        suggestion.id,
+      );
+      publishChanged("suggestion_dismissed", suggestion.item_seq);
+      return { id: publicId, decision: "dismiss", item: null };
+    }
+    const timestamp = now();
+    db.transaction(() => {
+      const current = suggestionById(suggestion.id);
+      if (!current || current.status !== "pending") {
+        throw new TodoError(
+          `Suggestion not found: ${publicId}`,
+          "not_found",
+          "Run `bb todo suggestions` to list pending suggestions.",
+        );
+      }
+      applySuggestion(current, actor, timestamp);
+    })();
+    publishChanged("suggestion_accepted", suggestion.item_seq);
+    return {
+      id: publicId,
+      decision: "accept",
+      item: await readEnrichedItem(suggestion.item_seq),
+    };
+  };
+
+  const acceptAllSuggestions = async (
+    input: z.infer<typeof acceptAllSuggestionsInput>,
+    actor: string,
+  ): Promise<{ accepted: { id: string; kind: "suggestion" | "inbox" }[] }> => {
+    expireStaleSuggestions();
+    const targets: { kind: "suggestion" | "inbox"; id: string }[] = [];
+    if (input.ids !== undefined && input.ids.length > 0) {
+      for (const raw of input.ids) {
+        const trimmed = raw.trim();
+        if (/^[sS]-/u.test(trimmed)) {
+          const seq = parseSuggestionId(trimmed);
+          if (seq === null) {
+            throw new TodoError(`Invalid suggestion id: ${raw}`, "invalid_id", "Use a suggestion id like S-1.");
+          }
+          targets.push({ kind: "suggestion", id: formatSuggestionId(seq) });
+          continue;
+        }
+        if (/^[tT]-/u.test(trimmed)) {
+          const seq = parseTodoId(trimmed);
+          if (seq === null) {
+            throw new TodoError(`Invalid todo id: ${raw}`, "invalid_id", "Use a todo id like T-1.");
+          }
+          targets.push({ kind: "inbox", id: formatTodoId(seq) });
+          continue;
+        }
+        const seq = parseSuggestionId(trimmed);
+        if (seq === null) {
+          throw new TodoError(`Invalid id: ${raw}`, "invalid_id", "Pass S-1 for a suggestion or T-1 for an inbox proposal.");
+        }
+        const suggestion = suggestionById(seq);
+        targets.push({
+          kind: suggestion ? "suggestion" : "inbox",
+          id: suggestion ? formatSuggestionId(seq) : formatTodoId(seq),
+        });
+      }
+    } else {
+      const suggestions = db
+        .prepare(
+          `SELECT s.id, s.patch_json, i.list_name
+           FROM todo_suggestions s
+           JOIN todo_items i ON i.seq = s.item_seq
+           WHERE s.status = 'pending' AND i.deleted_at IS NULL
+           ORDER BY s.created_at DESC, s.id DESC`,
+        )
+        .all() as { id: number; patch_json: string; list_name: string }[];
+      for (const row of suggestions) {
+        const patch = parseStoredPatch(row.patch_json);
+        if (!suggestionMatchesList(row.list_name, patch.listName, input.listFilter)) continue;
+        targets.push({ kind: "suggestion", id: formatSuggestionId(row.id) });
+      }
+      const inboxRows = db
+        .prepare(
+          `SELECT seq, list_name FROM todo_items
+           WHERE completed_at IS NULL AND bucket = 'inbox' AND ${activeSql}
+           ORDER BY seq DESC`,
+        )
+        .all() as { seq: number; list_name: string }[];
+      for (const row of inboxRows) {
+        if (!suggestionMatchesList(row.list_name, undefined, input.listFilter)) continue;
+        targets.push({ kind: "inbox", id: formatTodoId(row.seq) });
+      }
+    }
+    const accepted: { id: string; kind: "suggestion" | "inbox" }[] = [];
+    for (const target of targets) {
+      if (target.kind === "suggestion") {
+        await resolveSuggestion({ id: target.id, decision: "accept" }, actor);
+      } else {
+        await triageInbox({ id: target.id, action: "accept", bucket: "focus" }, actor);
+      }
+      accepted.push(target);
+    }
+    return { accepted };
+  };
+
   const listSnapshot = async (): Promise<TodoSnapshot> => {
+    const suggestions = await readPendingSuggestions();
     const openRows = db
       .prepare(
         `SELECT * FROM todo_items
@@ -1376,6 +1870,7 @@ export default function plugin(bb: BbPluginApi): void {
         inbox: pick(inboxRows),
       },
       done: pick(doneRows),
+      suggestions,
       counts: countOpenByBucket(),
       lists: summarizeLists(openRows),
     });
@@ -1631,6 +2126,16 @@ export default function plugin(bb: BbPluginApi): void {
     const timestamp = now();
     const undone = db.transaction(() => {
       restoreRevision(row.action, row.item_seq, before, after, timestamp);
+      if (row.action === "suggestion_accept") {
+        const matched = /^采纳建议 (S-\d+)/u.exec(row.summary);
+        const suggestionSeq = matched ? parseSuggestionId(matched[1] ?? "") : null;
+        if (suggestionSeq !== null) {
+          db.prepare(
+            `UPDATE todo_suggestions SET status = 'pending', resolved_at = NULL
+             WHERE id = ? AND status = 'accepted'`,
+          ).run(suggestionSeq);
+        }
+      }
       db.prepare("UPDATE todo_revisions SET undone_at = ? WHERE rev = ?").run(timestamp, row.rev);
       const touched = (before && before.length > 0 ? before : (after ?? [])).map((bundle) => bundle.item.seq);
       const restored = touched
@@ -1719,6 +2224,9 @@ export default function plugin(bb: BbPluginApi): void {
     setListColor: (input) => setListColor(input.listName, input.color),
     listRevisions: (input) => ({ revisions: listRevisions(input.limit) }),
     undoRevision: (input) => undoRevision(input.rev, "ui"),
+    suggest: (input) => suggestTodo(input, "ui"),
+    resolveSuggestion: (input) => resolveSuggestion(input, "ui"),
+    acceptAllSuggestions: (input) => acceptAllSuggestions(input, "ui"),
   });
 
   const reply = (
@@ -1811,6 +2319,41 @@ export default function plugin(bb: BbPluginApi): void {
       }
     }
     return lines.join("\n");
+  };
+
+  const suggestionEvidence = (
+    explicit: string[] | undefined,
+    noLink: boolean,
+    ctx: PluginCliContext,
+  ): string[] => {
+    const ids = [...new Set((explicit ?? []).map((threadId) => threadId.trim()).filter((threadId) => threadId.length > 0))];
+    if (ids.length > 0) return ids;
+    if (noLink) return [];
+    const current = ctx.threadId?.trim() || process.env.BB_THREAD_ID?.trim() || "";
+    return current.length > 0 ? [current] : [];
+  };
+
+  const humanSuggestions = (payload: { suggestions: TodoSuggestion[]; inbox: TodoItem[] }): string => {
+    if (payload.suggestions.length === 0 && payload.inbox.length === 0) return "No pending agent suggestions.";
+    const lines: string[] = [];
+    for (const suggestion of payload.suggestions) {
+      lines.push(`${suggestion.id}  ${suggestion.kind}  ${suggestion.itemId}  ${suggestion.itemTitle}`);
+      lines.push(`  ${suggestion.reason}`);
+      if (suggestion.evidenceThreads.length > 0) {
+        lines.push(`  threads: ${suggestion.evidenceThreads.map((thread) => thread.threadId).join(", ")}`);
+      }
+    }
+    for (const item of payload.inbox) {
+      lines.push(`${item.id}  inbox  ${item.title}`);
+      if (item.proposalReason) lines.push(`  ${item.proposalReason}`);
+    }
+    return lines.join("\n");
+  };
+
+  const loadAgentQueue = async (): Promise<{ suggestions: TodoSuggestion[]; inbox: TodoItem[] }> => {
+    const suggestions = await readPendingSuggestions();
+    const inbox = await listItems("inbox", undefined, "");
+    return { suggestions, inbox };
   };
 
   const humanScan = (result: TodoScanResult): string => {
@@ -1975,6 +2518,150 @@ export default function plugin(bb: BbPluginApi): void {
             return reply(item, options.json, () =>
               `Proposed ${item.id} (inbox): ${item.title}\nReason: ${item.proposalReason}`,
             );
+          },
+        }),
+
+        suggest: cliCommand({
+          summary: "Suggest a completion or edit for an existing todo",
+          description:
+            "Keeps one pending card per todo and kind. A second suggestion of the same kind updates that card instead of stacking another. The todo itself does not change until the user accepts it.",
+          positionals: [
+            { name: "id", description: "Existing todo id (T-1, t-1, or 1)", required: true },
+          ],
+          options: {
+            reason: {
+              type: "string",
+              required: true,
+              description: `Why this change is suggested (1-${TODO_PROPOSAL_REASON_MAX_LENGTH} characters).`,
+            },
+            done: {
+              type: "boolean",
+              description: "Suggest marking the todo complete. Cannot be combined with a field change.",
+            },
+            bucket: {
+              type: "enum",
+              values: ["focus", "later", "waiting"],
+              description: "Suggest moving the todo to this bucket.",
+            },
+            title: {
+              type: "string",
+              description: "Suggest a new title.",
+            },
+            list: {
+              type: "string",
+              description: "Suggest a project list. An empty string clears the list.",
+            },
+            section: {
+              type: "string",
+              description: "Suggest a section. An empty string clears the section.",
+            },
+            "notes-append": {
+              type: "string",
+              description: "Suggest text to append to the notes.",
+            },
+            thread: {
+              type: "string",
+              repeatable: true,
+              split: ",",
+              description:
+                "Evidence thread id. Repeat the flag or pass a comma-separated list. When omitted, the current BB thread is attached unless --no-link is set.",
+            },
+            "no-link": {
+              type: "boolean",
+              description: "Do not attach the current BB thread when no --thread is passed.",
+            },
+            json: jsonOption,
+          },
+          async run({ positionals, options }, ctx) {
+            const hasField =
+              options.bucket !== undefined ||
+              options.title !== undefined ||
+              options.list !== undefined ||
+              options.section !== undefined ||
+              options["notes-append"] !== undefined;
+            if (options.done && hasField) {
+              throw new PluginCliError("--done cannot be combined with a field change", {
+                code: "invalid_combination",
+                hint: "Send completion and edits as two suggestions so each card is one decision.",
+              });
+            }
+            if (!options.done && !hasField) {
+              throw new PluginCliError(
+                "Pass --done or at least one of --bucket, --title, --list, --section, --notes-append",
+                {
+                  code: "empty_suggestion",
+                  hint: "A suggestion has to say what should change.",
+                },
+              );
+            }
+            const input = parseCli(suggestTodoInput, {
+              id: cliTodoId(positionals.id),
+              reason: options.reason,
+              kind: options.done ? "complete" : "update",
+              patch: options.done
+                ? {}
+                : {
+                    title: options.title,
+                    bucket: options.bucket,
+                    listName: options.list,
+                    sectionName: options.section,
+                    notesAppend: options["notes-append"],
+                  },
+              evidenceThreadIds: suggestionEvidence(options.thread, options["no-link"], ctx),
+            });
+            const suggestion = await cliCall(() => suggestTodo(input, revisionActor(ctx)));
+            return reply(suggestion, options.json, () =>
+              `${suggestion.id}  ${suggestion.kind}  ${suggestion.itemId}  ${suggestion.itemTitle}\n${suggestion.reason}`,
+            );
+          },
+        }),
+
+        suggestions: cliCommand({
+          summary: "List pending suggestions and inbox proposals",
+          description: "Shows S-ids for edits or completions and T-ids still waiting in the inbox.",
+          options: { json: jsonOption },
+          async run({ options }) {
+            const queue = await cliCall(() => loadAgentQueue());
+            return reply(queue, options.json, () => humanSuggestions(queue));
+          },
+        }),
+
+        decide: cliCommand({
+          summary: "Accept or dismiss one pending suggestion",
+          positionals: [
+            { name: "id", description: "Suggestion id (S-1, s-1, or 1)", required: true },
+          ],
+          options: {
+            accept: {
+              type: "boolean",
+              description: "Apply the suggestion and record a revision that can be undone.",
+            },
+            dismiss: {
+              type: "boolean",
+              description: "Hide the suggestion without changing the todo.",
+            },
+            json: jsonOption,
+          },
+          constraints: [{ kind: "exactly-one", options: ["accept", "dismiss"] }],
+          async run({ positionals, options }, ctx) {
+            const seq = parseSuggestionId(positionals.id);
+            if (seq === null) {
+              throw new PluginCliError(`Invalid suggestion id: ${positionals.id}`, {
+                code: "invalid_id",
+                hint: "Use a suggestion id like S-1, s-1, or 1.",
+              });
+            }
+            const result = await cliCall(() =>
+              resolveSuggestion(
+                { id: formatSuggestionId(seq), decision: options.accept ? "accept" : "dismiss" },
+                revisionActor(ctx),
+              ),
+            );
+            const human =
+              result.decision === "dismiss"
+                ? `Dismissed ${result.id}`
+                : `Accepted ${result.id}${result.item ? `: ${result.item.id} ${result.item.completedAt ? "done" : result.item.bucket}` : ""}`;
+            return reply(result, options.json, () => human);
           },
         }),
 

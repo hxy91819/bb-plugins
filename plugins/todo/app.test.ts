@@ -13,6 +13,7 @@ import {
   type TodoListSummary,
   type TodoRevision,
   type TodoSnapshot,
+  type TodoSuggestion,
 } from "./contract";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
@@ -63,6 +64,7 @@ class Store {
   failSnapshot = false;
   colors = new Map<string, TodoColor>();
   revisions: TodoRevision[] = [];
+  suggestions: TodoSuggestion[] = [];
 
   add(overrides: Partial<TodoItem> = {}): TodoItem {
     const item = makeItem(this.nextSeq++, overrides);
@@ -81,6 +83,7 @@ class Store {
     const formal = active.filter((item) => item.bucket !== "inbox");
     const bucket = (name: TodoFormalBucket) =>
       formal.filter((item) => item.bucket === name).sort((a, b) => a.sortOrder - b.sortOrder || a.seq - b.seq);
+    const pendingSuggestions = this.suggestions.filter((suggestion) => suggestion.status === "pending");
     const counts: TodoCounts = {
       inbox: active.filter((item) => item.bucket === "inbox").length,
       focus: bucket("focus").length,
@@ -88,6 +91,7 @@ class Store {
       waiting: bucket("waiting").length,
       open: formal.length,
       done: this.items.filter((item) => item.completedAt !== null).length,
+      suggestions: pendingSuggestions.length,
     };
     const lists = new Map<string, TodoListSummary>();
     for (const item of formal) {
@@ -118,6 +122,7 @@ class Store {
         .sort((a, b) => String(b.completedAt).localeCompare(String(a.completedAt)))
         .slice(0, 20),
       counts,
+      suggestions: pendingSuggestions,
       lists: [...lists.values()],
     };
   }
@@ -235,6 +240,48 @@ function handlers(store: Store) {
         relatedThreadCount: Math.min(item.threads.length, 5),
       };
     },
+    suggest: () => {
+      throw new Error("unused in frontend tests");
+    },
+    resolveSuggestion: (input: { id: string; decision: "accept" | "dismiss" }) => {
+      const suggestion = store.suggestions.find((candidate) => candidate.id === input.id);
+      assert.ok(suggestion, `missing suggestion ${input.id}`);
+      if (input.decision === "dismiss") {
+        suggestion.status = "dismissed";
+        return { id: suggestion.id, decision: "dismiss" as const, item: null };
+      }
+      const item = store.find(suggestion.itemId);
+      if (suggestion.kind === "complete") item.completedAt = createdAt;
+      if (suggestion.patch.title) item.title = suggestion.patch.title;
+      if (suggestion.patch.bucket) item.bucket = suggestion.patch.bucket;
+      if (suggestion.patch.listName !== undefined) item.listName = suggestion.patch.listName;
+      if (suggestion.patch.sectionName !== undefined) item.sectionName = suggestion.patch.sectionName;
+      if (suggestion.patch.notesAppend) {
+        item.notes = item.notes.length > 0 ? `${item.notes}\n\n${suggestion.patch.notesAppend}` : suggestion.patch.notesAppend;
+      }
+      suggestion.status = "accepted";
+      return { id: suggestion.id, decision: "accept" as const, item: touch(item) };
+    },
+    acceptAllSuggestions: (input: { ids?: string[] }) => {
+      const accepted: { id: string; kind: "suggestion" | "inbox" }[] = [];
+      for (const id of input.ids ?? []) {
+        if (/^[sS]-/u.test(id)) {
+          const suggestion = store.suggestions.find((candidate) => candidate.id === id);
+          assert.ok(suggestion, `missing suggestion ${id}`);
+          suggestion.status = "accepted";
+          const item = store.find(suggestion.itemId);
+          if (suggestion.kind === "complete") item.completedAt = createdAt;
+          if (suggestion.patch.bucket) item.bucket = suggestion.patch.bucket;
+          accepted.push({ id, kind: "suggestion" });
+          continue;
+        }
+        const item = store.find(id);
+        item.bucket = "focus";
+        item.proposalReason = null;
+        accepted.push({ id, kind: "inbox" });
+      }
+      return { accepted };
+    },
   };
 }
 
@@ -266,7 +313,7 @@ test("一行输入按 Enter 秒加；右侧分组选择器切换生效；中文�
   const slot = await mountedPanel(store);
   try {
     await slot.findByText("还没有待办。");
-    assert.ok(slot.queryByLabelText("待确认提议") === null);
+    assert.ok(slot.queryByLabelText("Agent 建议") === null);
     const input = slot.getByRole("textbox", { name: "新待办标题" }) as HTMLInputElement;
 
     fireEvent.change(input, { target: { value: "安排发布" } });
@@ -362,12 +409,14 @@ test("Inbox 提议可采纳到指定分组、并入已有项或忽略，空时�
   store.add({ title: "直接采纳", bucket: "inbox", proposalReason: "默认落到 Focus" });
   const slot = await mountedPanel(store);
   try {
-    const inbox = await waitUntil(() => slot.getByLabelText("待确认提议"));
+    const inbox = await waitUntil(() => slot.getByLabelText("Agent 建议"));
+    assert.ok(within(inbox).getAllByText("新增待办").length >= 1);
     assert.ok(within(inbox).getByText("会议里反复提到，需要独立产出"));
     assert.ok(within(inbox).getByRole("button", { name: "打开会话 设计讨论" }));
 
     const acceptRow = within(inbox).getByText("招设计师").closest("li");
     assert.ok(acceptRow);
+    fireEvent.click(within(acceptRow).getByRole("button", { name: "调整" }));
     fireEvent.change(within(acceptRow).getByLabelText("采纳 T-2 到分组"), {
       target: { value: "later" },
     });
@@ -380,10 +429,11 @@ test("Inbox 提议可采纳到指定分组、并入已有项或忽略，空时�
     );
     await waitUntil(() => slot.getByRole("heading", { name: "Later" }));
 
-    const defaultRow = within(await waitUntil(() => slot.getByLabelText("待确认提议")))
+    const defaultRow = within(await waitUntil(() => slot.getByLabelText("Agent 建议")))
       .getByText("直接采纳")
       .closest("li");
     assert.ok(defaultRow);
+    fireEvent.click(within(defaultRow).getByRole("button", { name: "调整" }));
     assert.equal(
       (within(defaultRow).getByLabelText("采纳 T-5 到分组") as HTMLSelectElement).value,
       "focus",
@@ -397,9 +447,10 @@ test("Inbox 提议可采纳到指定分组、并入已有项或忽略，空时�
     );
     await waitUntil(() => slot.getByRole("heading", { name: "Focus" }));
 
-    const inboxAgain = await waitUntil(() => slot.getByLabelText("待确认提议"));
+    const inboxAgain = await waitUntil(() => slot.getByLabelText("Agent 建议"));
     const mergeRow = within(inboxAgain).getByText("合并提案").closest("li");
     assert.ok(mergeRow);
+    fireEvent.click(within(mergeRow).getByRole("button", { name: "调整" }));
     fireEvent.click(within(mergeRow).getByRole("button", { name: "并入" }));
     assert.equal(
       (within(mergeRow).getByLabelText("并入目标 T-3") as HTMLSelectElement).value,
@@ -414,7 +465,7 @@ test("Inbox 提议可采纳到指定分组、并入已有项或忽略，空时�
       ),
     );
 
-    const dismissRow = within(await waitUntil(() => slot.getByLabelText("待确认提议")))
+    const dismissRow = within(await waitUntil(() => slot.getByLabelText("Agent 建议")))
       .getByText("忽略提案")
       .closest("li");
     assert.ok(dismissRow);
@@ -426,7 +477,7 @@ test("Inbox 提议可采纳到指定分组、并入已有项或忽略，空时�
       ),
     );
     await waitFor(() => {
-      if (slot.queryByLabelText("待确认提议") !== null) throw new Error("inbox still visible");
+      if (slot.queryByLabelText("Agent 建议") !== null) throw new Error("inbox still visible");
     });
   } finally {
     slot.lifecycle.unmount();
@@ -543,7 +594,7 @@ test("导航角标优先提示 inbox，其次 focus，realtime 刷新且异常�
       assert.deepEqual(readBadge(), {
         count: 2,
         tone: "warning",
-        label: "2 项待确认提议",
+        label: "2 项 Agent 建议",
       }),
     );
 
@@ -1013,5 +1064,95 @@ test("展开中的未修改详情跟随行内标题保存", async () => {
     });
   } finally {
     slot.lifecycle.unmount();
+  }
+});
+
+test("Agent 建议卡片展示依据和证据会话，采纳与忽略分别确认", async () => {
+  const store = new Store();
+  store.add({ title: "上架检查", bucket: "later", listName: "LightSpace" });
+  store.add({ title: "另一项", bucket: "focus", listName: "LightSpace" });
+  const evidence = {
+    threadId: "thr-ship",
+    note: "",
+    linkedAt: createdAt,
+    threadTitle: "上架会话",
+    threadStatus: "idle",
+  };
+  store.suggestions.push({
+    id: "S-1",
+    seq: 1,
+    itemSeq: 1,
+    itemId: "T-1",
+    itemTitle: "上架检查",
+    currentBucket: "later",
+    currentListName: "LightSpace",
+    currentSectionName: "",
+    kind: "complete",
+    patch: { completionNote: "流水线已绿" },
+    reason: "关联会话已经合入并且没有剩余尾项",
+    evidenceThreads: [evidence],
+    status: "pending",
+    actor: "agent:thr-ship",
+    createdAt,
+    resolvedAt: null,
+  });
+  store.suggestions.push({
+    id: "S-2",
+    seq: 2,
+    itemSeq: 2,
+    itemId: "T-2",
+    itemTitle: "另一项",
+    currentBucket: "later",
+    currentListName: "Other",
+    currentSectionName: "",
+    kind: "update",
+    patch: { bucket: "focus" },
+    reason: "近期会话已经在推进这项",
+    evidenceThreads: [],
+    status: "pending",
+    actor: "agent:thr-ship",
+    createdAt,
+    resolvedAt: null,
+  });
+  const slot = await mountedPanel(store);
+  try {
+    const section = await waitUntil(() => slot.getByLabelText("Agent 建议"));
+    assert.ok(within(section).getByText("建议完成"));
+    assert.ok(within(section).getByText("移入 Focus"));
+    assert.ok(within(section).getByText("Later → Focus"));
+    assert.ok(within(section).getByText("关联会话已经合入并且没有剩余尾项"));
+    assert.ok(within(section).getByRole("button", { name: "打开会话 上架会话" }));
+    assert.ok(slot.getAllByText("有建议").length >= 1);
+
+    const completeCard = within(section).getByText("建议完成").closest("li");
+    assert.ok(completeCard);
+    fireEvent.click(within(completeCard).getByRole("button", { name: "采纳" }));
+    await waitUntil(() =>
+      assert.deepEqual(
+        slot.inspection.rpcCalls.find((call) => call.method === "resolveSuggestion"),
+        { method: "resolveSuggestion", input: { id: "S-1", decision: "accept" } },
+      ),
+    );
+
+    const updateCard = within(await waitUntil(() => slot.getByLabelText("Agent 建议")))
+      .getByText("移入 Focus")
+      .closest("li");
+    assert.ok(updateCard);
+    fireEvent.click(within(updateCard).getByRole("button", { name: "忽略" }));
+    await waitUntil(() =>
+      assert.deepEqual(
+        slot.inspection.rpcCalls.filter((call) => call.method === "resolveSuggestion").at(-1),
+        { method: "resolveSuggestion", input: { id: "S-2", decision: "dismiss" } },
+      ),
+    );
+    await waitFor(() => {
+      if (slot.queryByLabelText("Agent 建议") !== null) throw new Error("suggestions still visible");
+    });
+    // React 19 may defer passive effects. Flush them before the file teardown
+    // drops the JSDOM window.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  } finally {
+    slot.lifecycle.unmount();
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
 });

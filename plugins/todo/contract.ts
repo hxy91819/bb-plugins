@@ -47,6 +47,7 @@ export const todoFormalBucketSchema = z.enum(TODO_FORMAL_BUCKETS);
 export type TodoFormalBucket = z.infer<typeof todoFormalBucketSchema>;
 
 const TODO_ID_PATTERN = /^(?:[tT]-)?([1-9]\d*)$/u;
+const SUGGESTION_ID_PATTERN = /^(?:[sS]-)?([1-9]\d*)$/u;
 
 export function formatTodoId(seq: number): string {
   if (!Number.isSafeInteger(seq) || seq < 1) {
@@ -74,10 +75,33 @@ export function normalizeTodoId(input: string | number): string | null {
   return seq === null ? null : formatTodoId(seq);
 }
 
+export function formatSuggestionId(seq: number): string {
+  if (!Number.isSafeInteger(seq) || seq < 1) {
+    throw new RangeError(`Suggestion sequence must be a positive safe integer: ${seq}`);
+  }
+  return `S-${seq}`;
+}
+
+/** Accepts `S-1`, `s-1`, and `1`. `T-1` is not a suggestion id. */
+export function parseSuggestionId(input: string | number): number | null {
+  if (typeof input === "number") {
+    return Number.isSafeInteger(input) && input > 0 ? input : null;
+  }
+  const match = SUGGESTION_ID_PATTERN.exec(input.trim());
+  if (match === null) return null;
+  const seq = Number(match[1]);
+  return Number.isSafeInteger(seq) ? seq : null;
+}
+
 export const todoIdSchema = z
   .string()
   .trim()
   .regex(TODO_ID_PATTERN, "Use a todo id like T-1, t-1, or 1");
+
+export const suggestionIdSchema = z
+  .string()
+  .trim()
+  .regex(SUGGESTION_ID_PATTERN, "Use a suggestion id like S-1, s-1, or 1");
 
 export const todoThreadLinkSchema = z.object({
   threadId: z.string(),
@@ -127,6 +151,43 @@ export const todoListSummarySchema = z.object({
 });
 export type TodoListSummary = z.infer<typeof todoListSummarySchema>;
 
+export const todoSuggestionKindSchema = z.enum(["complete", "update"]);
+export type TodoSuggestionKind = z.infer<typeof todoSuggestionKindSchema>;
+
+export const todoSuggestionStatusSchema = z.enum(["pending", "accepted", "dismissed"]);
+export type TodoSuggestionStatus = z.infer<typeof todoSuggestionStatusSchema>;
+
+/** Only the fields that actually change are stored. Complete suggestions may carry a note. */
+export const todoSuggestionPatchSchema = z.object({
+  title: z.string().optional(),
+  bucket: todoFormalBucketSchema.optional(),
+  listName: z.string().optional(),
+  sectionName: z.string().optional(),
+  notesAppend: z.string().optional(),
+  completionNote: z.string().optional(),
+});
+export type TodoSuggestionPatch = z.infer<typeof todoSuggestionPatchSchema>;
+
+export const todoSuggestionSchema = z.object({
+  id: z.string(),
+  seq: z.number().int().positive(),
+  itemSeq: z.number().int().positive(),
+  itemId: z.string(),
+  itemTitle: z.string(),
+  currentBucket: todoBucketSchema,
+  currentListName: z.string(),
+  currentSectionName: z.string(),
+  kind: todoSuggestionKindSchema,
+  patch: todoSuggestionPatchSchema,
+  reason: z.string(),
+  evidenceThreads: z.array(todoThreadLinkSchema),
+  status: todoSuggestionStatusSchema,
+  actor: z.string(),
+  createdAt: z.string(),
+  resolvedAt: z.string().nullable(),
+});
+export type TodoSuggestion = z.infer<typeof todoSuggestionSchema>;
+
 export const todoCountsSchema = z.object({
   inbox: z.number().int().nonnegative(),
   focus: z.number().int().nonnegative(),
@@ -134,6 +195,7 @@ export const todoCountsSchema = z.object({
   waiting: z.number().int().nonnegative(),
   open: z.number().int().nonnegative(),
   done: z.number().int().nonnegative(),
+  suggestions: z.number().int().nonnegative(),
 });
 export type TodoCounts = z.infer<typeof todoCountsSchema>;
 
@@ -145,6 +207,7 @@ export const todoSnapshotSchema = z.object({
     inbox: z.array(todoItemSchema),
   }),
   done: z.array(todoItemSchema),
+  suggestions: z.array(todoSuggestionSchema),
   counts: todoCountsSchema,
   lists: z.array(todoListSummarySchema),
 });
@@ -279,6 +342,7 @@ export const TODO_REVISION_ACTIONS = [
   "triage_accept",
   "triage_merge",
   "triage_dismiss",
+  "suggestion_accept",
   "delete",
   "undo",
 ] as const;
@@ -323,6 +387,68 @@ export type PrepareStartSessionResult = z.infer<typeof prepareStartSessionOutput
 const triageInboxOutput = z.object({
   action: triageActionSchema,
   item: todoItemSchema.nullable(),
+});
+
+const suggestPatchInput = z.object({
+  title: z.string().trim().min(1).max(TODO_TITLE_MAX_LENGTH).optional(),
+  bucket: todoFormalBucketSchema.optional(),
+  listName: todoListNameSchema.optional(),
+  sectionName: todoSectionNameSchema.optional(),
+  notesAppend: z.string().trim().min(1).max(TODO_NOTES_MAX_LENGTH).optional(),
+  completionNote: z.string().trim().min(1).max(TODO_LOG_TEXT_MAX_LENGTH).optional(),
+});
+
+export const suggestTodoInput = z
+  .object({
+    id: todoIdSchema,
+    reason: z.string().trim().min(1).max(TODO_PROPOSAL_REASON_MAX_LENGTH),
+    kind: todoSuggestionKindSchema,
+    patch: suggestPatchInput.default({}),
+    evidenceThreadIds: z.array(z.string().trim().min(1)).default([]),
+  })
+  .superRefine((value, context) => {
+    if (value.kind !== "update") return;
+    const patch = value.patch;
+    const hasChange =
+      patch.title !== undefined ||
+      patch.bucket !== undefined ||
+      patch.listName !== undefined ||
+      patch.sectionName !== undefined ||
+      patch.notesAppend !== undefined;
+    if (!hasChange) {
+      context.addIssue({
+        code: "custom",
+        message: "An update suggestion needs a title, bucket, list, section, or notes append",
+        path: ["patch"],
+      });
+    }
+  });
+
+export const resolveSuggestionInput = z.object({
+  id: suggestionIdSchema,
+  decision: z.enum(["accept", "dismiss"]),
+});
+
+export const resolveSuggestionOutput = z.object({
+  id: z.string(),
+  decision: z.enum(["accept", "dismiss"]),
+  item: todoItemSchema.nullable(),
+});
+
+export const acceptAllSuggestionsInput = z.object({
+  /** When set, only suggestions and inbox proposals for this list. Empty string is uncategorized. */
+  listFilter: z.string().optional(),
+  /** `S-1` suggestions and `T-1` inbox proposals, accepted in this order. */
+  ids: z.array(z.string().trim().min(1)).optional(),
+});
+
+export const acceptAllSuggestionsOutput = z.object({
+  accepted: z.array(
+    z.object({
+      id: z.string(),
+      kind: z.enum(["suggestion", "inbox"]),
+    }),
+  ),
 });
 
 /**
@@ -382,6 +508,18 @@ export const rpcContract = defineRpcContract({
   undoRevision: {
     input: undoRevisionInput,
     output: undoRevisionOutput,
+  },
+  suggest: {
+    input: suggestTodoInput,
+    output: todoSuggestionSchema,
+  },
+  resolveSuggestion: {
+    input: resolveSuggestionInput,
+    output: resolveSuggestionOutput,
+  },
+  acceptAllSuggestions: {
+    input: acceptAllSuggestionsInput,
+    output: acceptAllSuggestionsOutput,
   },
 });
 

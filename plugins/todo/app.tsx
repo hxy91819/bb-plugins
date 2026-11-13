@@ -26,6 +26,7 @@ import {
   type TodoLogEntry,
   type TodoRevision,
   type TodoSnapshot,
+  type TodoSuggestion,
   type TodoThreadLink,
   type rpcContract,
 } from "./contract";
@@ -383,6 +384,123 @@ function QuickAdd({
   );
 }
 
+type SuggestionTone = "complete" | "move" | "update" | "inbox";
+
+function ActionTag({ label, tone }: { label: string; tone: SuggestionTone }) {
+  const toneStyle: Record<SuggestionTone, CSSProperties> = {
+    complete: { backgroundColor: "rgba(52,199,89,0.16)", color: "#248A3D" },
+    move: { backgroundColor: "rgba(255,159,10,0.2)", color: "#9A5B00" },
+    update: { backgroundColor: "rgba(0,122,255,0.14)", color: "#0A5FCC" },
+    inbox: { backgroundColor: "rgba(88,86,214,0.16)", color: "#3F3DB8" },
+  };
+  return (
+    <span
+      className="inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-[11px] font-medium leading-4"
+      style={toneStyle[tone]}
+    >
+      {label}
+    </span>
+  );
+}
+
+function updatePreview(suggestion: TodoSuggestion): string | null {
+  const parts: string[] = [];
+  const patch = suggestion.patch;
+  if (
+    patch.bucket &&
+    suggestion.currentBucket !== "inbox" &&
+    patch.bucket !== suggestion.currentBucket
+  ) {
+    parts.push(`${BUCKET_LABEL[suggestion.currentBucket]} → ${BUCKET_LABEL[patch.bucket]}`);
+  }
+  if (patch.title) parts.push(`标题：${patch.title}`);
+  if (patch.listName !== undefined || patch.sectionName !== undefined) {
+    const list = patch.listName ?? suggestion.currentListName;
+    const section = patch.sectionName ?? suggestion.currentSectionName;
+    const place = [list, section].filter((part) => part.length > 0).join(" / ");
+    parts.push(place.length > 0 ? `列表：${place}` : "列表：未归类");
+  }
+  if (patch.notesAppend) parts.push(`备注追加：${patch.notesAppend}`);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+function belongsToList(currentList: string, nextList: string | undefined, filter: string | null): boolean {
+  if (filter === null) return true;
+  if (nextList !== undefined && nextList === filter) return true;
+  return currentList === filter;
+}
+
+function SuggestionCard({
+  suggestion,
+  onChanged,
+  onError,
+}: {
+  suggestion: TodoSuggestion;
+  onChanged(): void;
+  onError(message: string): void;
+}) {
+  const rpc = useRpc<typeof rpcContract>();
+  const [pending, setPending] = useState<"accept" | "dismiss" | null>(null);
+  const nextBucket = suggestion.patch.bucket;
+  const moved =
+    suggestion.kind === "update" &&
+    nextBucket !== undefined &&
+    nextBucket !== suggestion.currentBucket;
+  const tag =
+    suggestion.kind === "complete"
+      ? { label: "建议完成", tone: "complete" as const }
+      : moved && nextBucket
+        ? { label: `移入 ${BUCKET_LABEL[nextBucket]}`, tone: "move" as const }
+        : { label: "建议更新", tone: "update" as const };
+  const preview = suggestion.kind === "update" ? updatePreview(suggestion) : null;
+
+  const run = async (decision: "accept" | "dismiss") => {
+    if (pending !== null) return;
+    setPending(decision);
+    try {
+      await rpc.call("resolveSuggestion", { id: suggestion.id, decision });
+      onChanged();
+    } catch {
+      onError(`没能处理 ${suggestion.id}，请再试一次。`);
+    } finally {
+      setPending(null);
+    }
+  };
+
+  return (
+    <li className="rounded-xl border border-border bg-background p-3">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        <ActionTag label={tag.label} tone={tag.tone} />
+        <span className="min-w-0 text-sm font-medium break-words text-foreground">{suggestion.itemTitle}</span>
+        <span className="text-[11px] tabular-nums text-muted-foreground">{suggestion.id}</span>
+      </div>
+      {preview ? <p className="mt-1 text-xs text-muted-foreground">{preview}</p> : null}
+      <p className="mt-2 text-sm leading-6 break-words whitespace-pre-wrap text-foreground">{suggestion.reason}</p>
+      <div className="mt-2">
+        <ThreadCapsules threads={suggestion.evidenceThreads} />
+      </div>
+      <div className="mt-2.5 flex flex-wrap items-center justify-end gap-2">
+        <button
+          type="button"
+          disabled={pending !== null}
+          onClick={() => void run("accept")}
+          className={primaryButtonClassName}
+        >
+          采纳
+        </button>
+        <button
+          type="button"
+          disabled={pending !== null}
+          onClick={() => void run("dismiss")}
+          className={quietButtonClassName}
+        >
+          忽略
+        </button>
+      </div>
+    </li>
+  );
+}
+
 function InboxRow({
   item,
   targets,
@@ -396,6 +514,7 @@ function InboxRow({
 }) {
   const rpc = useRpc<typeof rpcContract>();
   const [acceptBucket, setAcceptBucket] = useState<TodoFormalBucket>("focus");
+  const [adjusting, setAdjusting] = useState(false);
   const [merging, setMerging] = useState(false);
   const [mergeInto, setMergeInto] = useState("");
   const [pending, setPending] = useState<"accept" | "merge" | "dismiss" | null>(null);
@@ -419,32 +538,63 @@ function InboxRow({
     }
   };
 
+  const place = [item.listName, item.sectionName].filter((part) => part.length > 0).join("/");
+
   return (
     <li className="rounded-xl border border-border bg-background p-3">
-      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-        <span className="text-sm font-medium text-foreground">{item.title}</span>
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        <ActionTag label="新增待办" tone="inbox" />
+        <span className="min-w-0 text-sm font-medium break-words text-foreground">{item.title}</span>
         <span className="text-[11px] tabular-nums text-muted-foreground">{item.id}</span>
+        {place ? (
+          <span className="inline-flex max-w-full truncate rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+            #{place}
+          </span>
+        ) : null}
       </div>
-      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-        <span className="text-muted-foreground">来源：</span>
+      <p className="mt-2 text-sm leading-6 break-words whitespace-pre-wrap text-foreground">
         {item.proposalReason || "Agent 从最近的记录中提议"}
       </p>
-      {item.listName ? (
-        <p className="mt-1 text-[11px] text-muted-foreground">
-          建议归入 {item.listName}
-          {item.sectionName ? ` / ${item.sectionName}` : ""}
-        </p>
-      ) : null}
       <div className="mt-2">
         <ThreadCapsules threads={item.threads} />
       </div>
-      <div className="mt-2.5 flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-1 rounded-full border border-border bg-card p-0.5">
+      <div className="mt-2.5 flex flex-wrap items-center justify-end gap-2">
+        <button
+          type="button"
+          disabled={pending !== null}
+          onClick={() => void run("accept", { id: item.id, action: "accept", bucket: acceptBucket })}
+          className={primaryButtonClassName}
+        >
+          采纳
+        </button>
+        <button
+          type="button"
+          disabled={pending !== null}
+          onClick={() => void run("dismiss", { id: item.id, action: "dismiss" })}
+          className={quietButtonClassName}
+        >
+          忽略
+        </button>
+        <button
+          type="button"
+          aria-expanded={adjusting}
+          disabled={pending !== null}
+          onClick={() => {
+            setAdjusting((value) => !value);
+            if (merging) setMerging(false);
+          }}
+          className={quietButtonClassName}
+        >
+          调整
+        </button>
+      </div>
+      {adjusting ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
           <select
             aria-label={`采纳 ${item.id} 到分组`}
             value={acceptBucket}
             onChange={(event) => setAcceptBucket(event.target.value as TodoFormalBucket)}
-            className="touch-manipulation cursor-pointer rounded-full bg-transparent px-1.5 py-0.5 text-base text-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
+            className="touch-manipulation cursor-pointer rounded-md border border-border bg-background px-2 py-1 text-base text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
           >
             {FORMAL_BUCKETS.map((bucket) => (
               <option key={bucket} value={bucket}>
@@ -455,32 +605,16 @@ function InboxRow({
           <button
             type="button"
             disabled={pending !== null}
-            onClick={() => void run("accept", { id: item.id, action: "accept", bucket: acceptBucket })}
-            className={primaryButtonClassName}
+            onClick={() => {
+              setMerging((value) => !value);
+              setMergeInto(targets[0]?.id ?? "");
+            }}
+            className={quietButtonClassName}
           >
-            采纳
+            并入
           </button>
         </div>
-        <button
-          type="button"
-          disabled={pending !== null}
-          onClick={() => {
-            setMerging((value) => !value);
-            setMergeInto(targets[0]?.id ?? "");
-          }}
-          className={quietButtonClassName}
-        >
-          并入
-        </button>
-        <button
-          type="button"
-          disabled={pending !== null}
-          onClick={() => void run("dismiss", { id: item.id, action: "dismiss" })}
-          className={quietButtonClassName}
-        >
-          忽略
-        </button>
-      </div>
+      ) : null}
       {merging ? (
         <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-2">
           <select
@@ -521,31 +655,78 @@ function InboxRow({
   );
 }
 
-function InboxSection({
-  items,
+function AgentSuggestionsSection({
+  suggestions,
+  inbox,
+  listFilter,
   targets,
   onChanged,
   onError,
 }: {
-  items: TodoItem[];
+  suggestions: TodoSuggestion[];
+  inbox: TodoItem[];
+  listFilter: string | null;
   targets: TodoItem[];
   onChanged(): void;
   onError(message: string): void;
 }) {
-  if (items.length === 0) return null;
+  const rpc = useRpc<typeof rpcContract>();
+  const [acceptingAll, setAcceptingAll] = useState(false);
+  const visibleSuggestions = suggestions.filter((suggestion) =>
+    belongsToList(suggestion.currentListName, suggestion.patch.listName, listFilter),
+  );
+  const visibleInbox = inbox.filter((item) => belongsToList(item.listName, undefined, listFilter));
+  const total = visibleSuggestions.length + visibleInbox.length;
+  if (total === 0) return null;
+
+  const acceptAll = async () => {
+    if (acceptingAll) return;
+    setAcceptingAll(true);
+    try {
+      await rpc.call("acceptAllSuggestions", {
+        ids: [...visibleSuggestions.map((suggestion) => suggestion.id), ...visibleInbox.map((item) => item.id)],
+      });
+      onChanged();
+    } catch {
+      onError("没能全部采纳，请再试一次。");
+    } finally {
+      setAcceptingAll(false);
+    }
+  };
+
   return (
     <section
-      aria-label="待确认提议"
+      aria-label="Agent 建议"
       className="space-y-2 rounded-2xl border border-border bg-card p-3 shadow-sm"
     >
-      <div className="flex flex-wrap items-baseline justify-between gap-2 px-1">
+      <div className="flex items-center justify-between gap-2 px-1">
         <h2 className="text-xs font-medium text-foreground">
-          待确认 <span className="tabular-nums text-muted-foreground">{items.length}</span>
+          Agent 建议{" "}
+          <span className="ml-1 inline-flex min-w-5 items-center justify-center rounded-full bg-muted px-1.5 py-0.5 text-[11px] tabular-nums text-muted-foreground">
+            {total}
+          </span>
         </h2>
-        <p className="text-[11px] text-muted-foreground">Agent 从纪要与会话里提议的新事项</p>
+        {total >= 2 ? (
+          <button
+            type="button"
+            disabled={acceptingAll}
+            onClick={() => void acceptAll()}
+            className={quietButtonClassName}
+          >
+            {acceptingAll ? "采纳中…" : "全部采纳"}
+          </button>
+        ) : null}
       </div>
       <ul className="space-y-2">
-        {items.map((item) => (
+        {visibleSuggestions.map((suggestion) => (
+          <SuggestionCard
+            key={suggestion.id}
+            suggestion={suggestion}
+            onChanged={onChanged}
+            onError={onError}
+          />
+        ))}
+        {visibleInbox.map((item) => (
           <InboxRow key={item.id} item={item} targets={targets} onChanged={onChanged} onError={onError} />
         ))}
       </ul>
@@ -891,6 +1072,7 @@ function TodoRow({
   item,
   lists,
   showListChip,
+  hasSuggestion,
   expanded,
   divider,
   onToggle,
@@ -901,6 +1083,7 @@ function TodoRow({
   item: TodoItem;
   lists: TodoListSummary[];
   showListChip: boolean;
+  hasSuggestion: boolean;
   expanded: boolean;
   divider: boolean;
   onToggle(): void;
@@ -1089,6 +1272,12 @@ function TodoRow({
                 {optimisticTitle ?? item.title}
               </button>
             )}
+            {hasSuggestion ? (
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] text-muted-foreground" style={{ backgroundColor: "rgba(255,159,10,0.16)" }}>
+                <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: "#FF9F0A" }} />
+                有建议
+              </span>
+            ) : null}
             {showListChip && item.listName ? (
               <span
                 className="inline-flex max-w-full shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] text-muted-foreground"
@@ -1192,6 +1381,7 @@ function TodoSection({
   listFilter,
   groupByList,
   collapsedSections,
+  suggestedItemIds,
   expandedId,
   onToggleSection,
   onToggle,
@@ -1205,6 +1395,7 @@ function TodoSection({
   listFilter: string | null;
   groupByList: boolean;
   collapsedSections: ReadonlySet<string>;
+  suggestedItemIds: ReadonlySet<string>;
   expandedId: string | null;
   onToggleSection(key: string): void;
   onToggle(id: string): void;
@@ -1229,6 +1420,7 @@ function TodoSection({
         item={item}
         lists={lists}
         showListChip={showChip}
+        hasSuggestion={suggestedItemIds.has(item.id)}
         divider={offset + index > 0}
         expanded={expandedId === item.id}
         onToggle={() => onToggle(item.id)}
@@ -1658,8 +1850,11 @@ function useTodoBadge(): ExperimentalBadge | null {
   try {
     if (counts === null) return null;
     const inbox = Number.isSafeInteger(counts.inbox) && counts.inbox > 0 ? counts.inbox : 0;
-    if (inbox > 0) {
-      return { count: inbox, tone: "warning", label: `${inbox} 项待确认提议` };
+    const suggestions =
+      Number.isSafeInteger(counts.suggestions) && counts.suggestions > 0 ? counts.suggestions : 0;
+    const pendingTotal = inbox + suggestions;
+    if (pendingTotal > 0) {
+      return { count: pendingTotal, tone: "warning", label: `${pendingTotal} 项 Agent 建议` };
     }
     const focus = Number.isSafeInteger(counts.focus) && counts.focus > 0 ? counts.focus : 0;
     if (focus > 0) {
@@ -1756,6 +1951,7 @@ function TodoPanel(_props: PluginNavPanelProps) {
     snapshot !== null &&
     snapshot.counts.open === 0 &&
     snapshot.counts.inbox === 0 &&
+    snapshot.counts.suggestions === 0 &&
     snapshot.counts.done === 0;
   const selectedList = listFilter && listFilter.length > 0 ? listFilter : null;
   const selectedColor = snapshot && selectedList ? colorOf(snapshot.lists, selectedList) : null;
@@ -1825,8 +2021,10 @@ function TodoPanel(_props: PluginNavPanelProps) {
             {selectedList ? (
               <ListHeading name={selectedList} color={selectedColor} />
             ) : null}
-            <InboxSection
-              items={snapshot.buckets.inbox}
+            <AgentSuggestionsSection
+              suggestions={snapshot.suggestions}
+              inbox={snapshot.buckets.inbox}
+              listFilter={listFilter}
               targets={formalItems}
               onChanged={refresh}
               onError={report}
@@ -1847,6 +2045,7 @@ function TodoPanel(_props: PluginNavPanelProps) {
                     listFilter={listFilter}
                     groupByList={groupByList}
                     collapsedSections={collapsedSections}
+                    suggestedItemIds={new Set(snapshot.suggestions.map((suggestion) => suggestion.itemId))}
                     expandedId={expandedId}
                     onToggleSection={(key) => {
                       setCollapsedSections((current) => {

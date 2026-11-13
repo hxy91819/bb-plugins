@@ -1187,6 +1187,247 @@ test("out-of-order undo returns history_stale; newest-first undo succeeds", asyn
   }
 });
 
+test("suggestions dedupe, apply through revisions, and undo restores the todo", async () => {
+  const { bb, harness } = fixture();
+  const previousThread = process.env.BB_THREAD_ID;
+  try {
+    await plugin(bb);
+    const item = (await runJson(harness, [
+      "add",
+      "Ship the checklist",
+      "--bucket",
+      "later",
+      "--notes",
+      "Original notes",
+    ])) as TodoItem;
+
+    const missingChange = await runJsonError(harness, ["suggest", item.id, "--reason", "nothing to do"]);
+    assert.equal(missingChange.error.code, "empty_suggestion");
+    const combined = await runJsonError(harness, [
+      "suggest",
+      item.id,
+      "--done",
+      "--bucket",
+      "focus",
+      "--reason",
+      "both",
+    ]);
+    assert.equal(combined.error.code, "invalid_combination");
+    const unchanged = await runJsonError(harness, [
+      "suggest",
+      item.id,
+      "--bucket",
+      "later",
+      "--reason",
+      "already there",
+    ]);
+    assert.equal(unchanged.error.code, "empty_patch");
+
+    process.env.BB_THREAD_ID = "thr-env";
+    const firstComplete = (await runJson(harness, [
+      "suggest",
+      "1",
+      "--done",
+      "--reason",
+      "first reason",
+    ])) as {
+      id: string;
+      kind: string;
+      evidenceThreads: { threadId: string }[];
+    };
+    assert.equal(firstComplete.id, "S-1");
+    assert.equal(firstComplete.kind, "complete");
+    assert.deepEqual(
+      firstComplete.evidenceThreads.map((thread) => thread.threadId),
+      ["thr-env"],
+    );
+
+    const mergedComplete = (await runJson(
+      harness,
+      ["suggest", "t-1", "--done", "--reason", "merged reason", "--thread", "thr-running", "--no-link"],
+      { threadId: "thr-other" },
+    )) as {
+      id: string;
+      seq: number;
+      reason: string;
+      evidenceThreads: { threadId: string; threadTitle: string | null; threadStatus: string | null }[];
+    };
+    assert.equal(mergedComplete.id, "S-1");
+    assert.equal(mergedComplete.seq, 1);
+    assert.equal(mergedComplete.reason, "merged reason");
+    assert.equal(mergedComplete.evidenceThreads.length, 1);
+    assert.equal(mergedComplete.evidenceThreads[0]?.threadId, "thr-running");
+    assert.equal(mergedComplete.evidenceThreads[0]?.threadTitle, "Thread thr-running");
+    assert.equal(mergedComplete.evidenceThreads[0]?.threadStatus, "active");
+
+    const update = (await harness.behavior.callRpc("suggest", {
+      id: item.id,
+      reason: "近期会话已经在推进",
+      kind: "update",
+      patch: {
+        bucket: "focus",
+        listName: "LightSpace",
+        sectionName: "生产与上架",
+        notesAppend: "新进展",
+        title: item.title,
+      },
+      evidenceThreadIds: ["thr-running", "thr-running", "thr-extra"],
+    })) as {
+      id: string;
+      kind: string;
+      patch: { bucket?: string; title?: string; listName?: string; notesAppend?: string };
+      evidenceThreads: { threadId: string }[];
+    };
+    assert.equal(update.id, "S-2");
+    assert.equal(update.kind, "update");
+    assert.equal(update.patch.title, undefined);
+    assert.equal(update.patch.bucket, "focus");
+    assert.equal(update.patch.listName, "LightSpace");
+    assert.equal(update.patch.notesAppend, "新进展");
+    assert.deepEqual(
+      update.evidenceThreads.map((thread) => thread.threadId),
+      ["thr-running", "thr-extra"],
+    );
+
+    const queued = (await runJson(harness, ["suggestions"])) as {
+      suggestions: { id: string }[];
+      inbox: { id: string }[];
+    };
+    assert.deepEqual(
+      queued.suggestions.map((suggestion) => suggestion.id),
+      ["S-2", "S-1"],
+    );
+    const proposal = (await runJson(harness, [
+      "propose",
+      "A separate deliverable",
+      "--reason",
+      "Not part of the checklist",
+    ])) as TodoItem;
+    const withInbox = (await runJson(harness, ["suggestions"])) as {
+      suggestions: { id: string }[];
+      inbox: { id: string }[];
+    };
+    assert.deepEqual(
+      withInbox.inbox.map((entry) => entry.id),
+      [proposal.id],
+    );
+
+    const snapshot = (await harness.behavior.callRpc("listSnapshot", {})) as TodoSnapshot;
+    assert.equal(snapshot.counts.suggestions, 2);
+    assert.equal(snapshot.suggestions.length, 2);
+
+    const acceptedUpdate = (await harness.behavior.callRpc("resolveSuggestion", {
+      id: "s-2",
+      decision: "accept",
+    })) as { id: string; decision: string; item: TodoItem };
+    assert.equal(acceptedUpdate.decision, "accept");
+    assert.equal(acceptedUpdate.item.bucket, "focus");
+    assert.equal(acceptedUpdate.item.listName, "LightSpace");
+    assert.equal(acceptedUpdate.item.sectionName, "生产与上架");
+    assert.match(acceptedUpdate.item.notes, /新进展/);
+    assert.equal(
+      acceptedUpdate.item.logs.some((log) => log.text.includes("later → focus")),
+      true,
+    );
+    assert.deepEqual(
+      acceptedUpdate.item.threads.map((thread) => thread.threadId).sort(),
+      ["thr-extra", "thr-running"],
+    );
+    const history = (await harness.behavior.callRpc("listRevisions", {})) as {
+      revisions: TodoRevision[];
+    };
+    const acceptRevision = history.revisions.find((revision) => revision.action === "suggestion_accept");
+    assert.ok(acceptRevision);
+    assert.match(acceptRevision.summary, /采纳建议 S-2/);
+
+    const undone = (await harness.behavior.callRpc("undoRevision", { rev: acceptRevision.rev })) as {
+      undoneRev: number;
+    };
+    assert.equal(undone.undoneRev, acceptRevision.rev);
+    const restored = (await runJson(harness, ["show", item.id])) as TodoItem;
+    assert.equal(restored.bucket, "later");
+    assert.equal(restored.listName, "");
+    assert.equal(restored.notes, "Original notes");
+    assert.equal(restored.threads.length, 0);
+    assert.equal(restored.logs.some((log) => log.text.includes("采纳建议")), false);
+    const afterUndo = (await harness.behavior.callRpc("listSnapshot", {})) as TodoSnapshot;
+    assert.equal(
+      afterUndo.suggestions.some((suggestion) => suggestion.id === "S-2" && suggestion.status === "pending"),
+      true,
+    );
+
+    const acceptedComplete = (await runJson(harness, ["decide", "S-1", "--accept"])) as {
+      decision: string;
+      item: TodoItem;
+    };
+    assert.equal(acceptedComplete.decision, "accept");
+    assert.equal(acceptedComplete.item.completedAt !== null, true);
+    assert.equal(
+      acceptedComplete.item.logs.some((log) => log.text === "采纳建议：标记完成"),
+      true,
+    );
+    assert.equal(
+      acceptedComplete.item.threads.some((thread) => thread.threadId === "thr-running"),
+      true,
+    );
+    const completeRevision = (
+      (await harness.behavior.callRpc("listRevisions", {})) as { revisions: TodoRevision[] }
+    ).revisions.find((revision) => revision.summary.includes("采纳建议 S-1"));
+    assert.ok(completeRevision);
+    await harness.behavior.callRpc("undoRevision", { rev: completeRevision.rev });
+    const reopened = (await runJson(harness, ["show", item.id])) as TodoItem;
+    assert.equal(reopened.completedAt, null);
+    assert.equal(reopened.logs.some((log) => log.text === "采纳建议：标记完成"), false);
+    assert.equal(reopened.threads.some((thread) => thread.threadId === "thr-running"), false);
+
+    const dismissed = (await runJson(harness, ["decide", "1", "--dismiss"])) as {
+      id: string;
+      decision: string;
+      item: TodoItem | null;
+    };
+    assert.equal(dismissed.id, "S-1");
+    assert.equal(dismissed.decision, "dismiss");
+    assert.equal(dismissed.item, null);
+    const afterDismiss = (await runJson(harness, ["show", item.id])) as TodoItem;
+    assert.equal(afterDismiss.bucket, "later");
+    assert.equal(afterDismiss.completedAt, null);
+    assert.equal(afterDismiss.title, item.title);
+
+    const lingering = (await harness.behavior.callRpc("suggest", {
+      id: item.id,
+      reason: "maybe done",
+      kind: "complete",
+      patch: { completionNote: "checked by hand" },
+      evidenceThreadIds: [],
+    })) as { id: string };
+    const keptUpdate = (await harness.behavior.callRpc("suggest", {
+      id: item.id,
+      reason: "rename after the check",
+      kind: "update",
+      patch: { title: "Ship the renamed checklist" },
+    })) as { id: string };
+    await runJson(harness, ["done", item.id, "--note", "manual"]);
+    const afterManual = (await harness.behavior.callRpc("listSnapshot", {})) as TodoSnapshot;
+    assert.equal(
+      afterManual.suggestions.some((suggestion) => suggestion.id === lingering.id),
+      false,
+    );
+    assert.equal(
+      afterManual.suggestions.some((suggestion) => suggestion.id === keptUpdate.id),
+      true,
+    );
+
+    await runJson(harness, ["rm", item.id]);
+    const afterRemove = (await harness.behavior.callRpc("listSnapshot", {})) as TodoSnapshot;
+    assert.equal(afterRemove.suggestions.length, 0);
+    assert.equal(afterRemove.counts.suggestions, 0);
+  } finally {
+    if (previousThread === undefined) delete process.env.BB_THREAD_ID;
+    else process.env.BB_THREAD_ID = previousThread;
+    await harness.lifecycle.dispose();
+  }
+});
+
 test("package imports only public SDK surfaces", async () => {
   const result = await experimental_scanPublicSdkOnly(process.cwd(), {
     // Frontend test-only tooling; production code keeps the server surface free
