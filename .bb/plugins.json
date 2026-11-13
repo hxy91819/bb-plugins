@@ -42,6 +42,10 @@
     {
       "name": "file-download",
       "source": "./plugins/file-download"
+    },
+    {
+      "name": "todo",
+      "source": "./plugins/todo"
     }
   ]
 }
