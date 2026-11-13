@@ -7,12 +7,29 @@ export const TODO_CHANGED_EVENT = "todo:changed" as const;
 export const TODO_FORMAL_BUCKETS = ["focus", "later", "waiting"] as const;
 export const TODO_BUCKET_ORDER = ["focus", "later", "waiting", "inbox"] as const;
 
+/** Apple Reminders-style palette. The first eight lists take these in order. */
+export const TODO_COLORS = [
+  "blue",
+  "orange",
+  "green",
+  "purple",
+  "rose",
+  "teal",
+  "amber",
+  "indigo",
+] as const;
+export type TodoColor = (typeof TODO_COLORS)[number];
+
 export const TODO_TITLE_MAX_LENGTH = 500;
 export const TODO_NOTES_MAX_LENGTH = 20_000;
 export const TODO_NEXT_STEP_MAX_LENGTH = 2_000;
 export const TODO_LOG_TEXT_MAX_LENGTH = 4_000;
 export const TODO_PROPOSAL_REASON_MAX_LENGTH = 2_000;
 export const TODO_THREAD_NOTE_MAX_LENGTH = 1_000;
+export const TODO_LIST_NAME_MAX_LENGTH = 80;
+export const TODO_SECTION_NAME_MAX_LENGTH = 80;
+export const TODO_REVISION_LIMIT_DEFAULT = 20;
+export const TODO_REVISION_LIMIT_MAX = 100;
 /** How many recently completed todos the panel snapshot includes. */
 export const TODO_DONE_SNAPSHOT_LIMIT = 20;
 /** Linked threads quoted in a new-session prompt, newest or active first. */
@@ -84,7 +101,10 @@ export const todoItemSchema = z.object({
   notes: z.string(),
   nextStep: z.string(),
   proposalReason: z.string().nullable(),
+  listName: z.string(),
+  sectionName: z.string(),
   completedAt: z.string().nullable(),
+  deletedAt: z.string().nullable(),
   sortOrder: z.number(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -92,6 +112,16 @@ export const todoItemSchema = z.object({
   logs: z.array(todoLogEntrySchema),
 });
 export type TodoItem = z.infer<typeof todoItemSchema>;
+
+export const todoColorSchema = z.enum(TODO_COLORS);
+
+export const todoListSummarySchema = z.object({
+  name: z.string(),
+  color: todoColorSchema,
+  openCount: z.number().int().nonnegative(),
+  sections: z.array(z.string()),
+});
+export type TodoListSummary = z.infer<typeof todoListSummarySchema>;
 
 export const todoCountsSchema = z.object({
   inbox: z.number().int().nonnegative(),
@@ -112,6 +142,7 @@ export const todoSnapshotSchema = z.object({
   }),
   done: z.array(todoItemSchema),
   counts: todoCountsSchema,
+  lists: z.array(todoListSummarySchema),
 });
 export type TodoSnapshot = z.infer<typeof todoSnapshotSchema>;
 
@@ -126,6 +157,8 @@ export const todoScanItemSchema = z.object({
   seq: z.number().int().positive(),
   title: z.string(),
   bucket: todoFormalBucketSchema,
+  listName: z.string(),
+  sectionName: z.string(),
   nextStep: z.string(),
   latestLog: todoLogEntrySchema.nullable(),
   threads: z.array(todoThreadLinkSchema),
@@ -141,9 +174,14 @@ export const todoScanResultSchema = z.object({
 });
 export type TodoScanResult = z.infer<typeof todoScanResultSchema>;
 
+const todoListNameSchema = z.string().trim().max(TODO_LIST_NAME_MAX_LENGTH);
+const todoSectionNameSchema = z.string().trim().max(TODO_SECTION_NAME_MAX_LENGTH);
+
 export const quickAddInput = z.object({
   title: z.string().trim().min(1).max(TODO_TITLE_MAX_LENGTH),
   bucket: todoFormalBucketSchema.default("focus"),
+  listName: todoListNameSchema.optional(),
+  sectionName: todoSectionNameSchema.optional(),
 });
 
 export const updateTodoInput = z.object({
@@ -152,6 +190,8 @@ export const updateTodoInput = z.object({
   bucket: todoFormalBucketSchema.optional(),
   notes: z.string().max(TODO_NOTES_MAX_LENGTH).optional(),
   nextStep: z.string().max(TODO_NEXT_STEP_MAX_LENGTH).optional(),
+  listName: todoListNameSchema.optional(),
+  sectionName: todoSectionNameSchema.optional(),
   sortOrder: z.number().optional(),
 });
 
@@ -167,6 +207,8 @@ export const triageInboxInput = z
     action: triageActionSchema,
     bucket: todoFormalBucketSchema.optional(),
     intoId: todoIdSchema.optional(),
+    listName: todoListNameSchema.optional(),
+    sectionName: todoSectionNameSchema.optional(),
   })
   .superRefine((value, context) => {
     if (value.action === "merge" && value.intoId === undefined) {
@@ -190,6 +232,13 @@ export const triageInboxInput = z
         path: ["bucket"],
       });
     }
+    if (value.action !== "accept" && (value.listName !== undefined || value.sectionName !== undefined)) {
+      context.addIssue({
+        code: "custom",
+        message: "listName and sectionName are only valid when action is accept",
+        path: ["listName"],
+      });
+    }
   });
 
 export const addTodoLogInput = z.object({
@@ -211,6 +260,50 @@ export const unlinkTodoThreadInput = z.object({
 });
 
 export const removeTodoInput = z.object({ id: todoIdSchema });
+
+export const setListColorInput = z.object({
+  listName: z.string().trim().min(1).max(TODO_LIST_NAME_MAX_LENGTH),
+  color: todoColorSchema,
+});
+
+export const listRevisionsInput = z.object({
+  limit: z.number().int().min(1).max(TODO_REVISION_LIMIT_MAX).default(TODO_REVISION_LIMIT_DEFAULT),
+});
+
+export const TODO_REVISION_ACTIONS = [
+  "create",
+  "update",
+  "complete",
+  "reopen",
+  "triage_accept",
+  "triage_merge",
+  "triage_dismiss",
+  "delete",
+  "undo",
+] as const;
+export const todoRevisionActionSchema = z.enum(TODO_REVISION_ACTIONS);
+export type TodoRevisionAction = z.infer<typeof todoRevisionActionSchema>;
+
+export const todoRevisionSchema = z.object({
+  rev: z.number().int().positive(),
+  itemSeq: z.number().int().positive(),
+  itemId: z.string(),
+  action: todoRevisionActionSchema,
+  actor: z.string(),
+  summary: z.string(),
+  undoneAt: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type TodoRevision = z.infer<typeof todoRevisionSchema>;
+
+export const undoRevisionInput = z.object({
+  rev: z.number().int().positive().optional(),
+});
+
+export const undoRevisionOutput = z.object({
+  undoneRev: z.number().int().positive(),
+  revision: todoRevisionSchema,
+});
 
 export const prepareStartSessionInput = z.object({
   id: todoIdSchema,
@@ -277,6 +370,114 @@ export const rpcContract = defineRpcContract({
     input: prepareStartSessionInput,
     output: prepareStartSessionOutput,
   },
+  setListColor: {
+    input: setListColorInput,
+    output: todoListSummarySchema,
+  },
+  listRevisions: {
+    input: listRevisionsInput,
+    output: z.object({ revisions: z.array(todoRevisionSchema) }),
+  },
+  undoRevision: {
+    input: undoRevisionInput,
+    output: undoRevisionOutput,
+  },
 });
+
+const HAN_PATTERN = /\p{Script=Han}/u;
+
+function isListToken(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value.length <= TODO_LIST_NAME_MAX_LENGTH &&
+    !/[\s/]/u.test(value)
+  );
+}
+
+/**
+ * `#List title` or `#List/Section title` at the start of a quick-add title.
+ * A spaced section is kept intact when the title begins at the first Han
+ * character (`#LightSpace/Hosting Station 写 demo 期方案`). Otherwise the
+ * section is the first token. Returns null when the remainder would be empty.
+ */
+export function parseTitlePrefix(
+  raw: string,
+): { listName: string; sectionName: string; title: string } | null {
+  const input = raw.trim();
+  if (!input.startsWith("#")) return null;
+  const body = input.slice(1);
+  const slash = body.indexOf("/");
+  const firstWs = body.search(/\s/u);
+  if (firstWs <= 0) return null;
+
+  if (slash === -1 || slash > firstWs) {
+    const listName = body.slice(0, firstWs);
+    const title = body.slice(firstWs).trim();
+    if (!isListToken(listName) || title.length === 0 || title.length > TODO_TITLE_MAX_LENGTH) {
+      return null;
+    }
+    return { listName, sectionName: "", title };
+  }
+
+  const listName = body.slice(0, slash);
+  if (!isListToken(listName)) return null;
+  const after = body.slice(slash + 1).trim();
+  const han = after.search(HAN_PATTERN);
+  if (han > 0 && /\s/u.test(after.slice(0, han))) {
+    const sectionName = after.slice(0, han).trim();
+    const title = after.slice(han).trim();
+    if (
+      sectionName.length > 0 &&
+      sectionName.length <= TODO_SECTION_NAME_MAX_LENGTH &&
+      !sectionName.includes("/") &&
+      title.length > 0 &&
+      title.length <= TODO_TITLE_MAX_LENGTH
+    ) {
+      return { listName, sectionName, title };
+    }
+  }
+  const match = /^(\S+)\s+(\S[\s\S]*)$/u.exec(after);
+  if (!match) return null;
+  const sectionName = match[1] ?? "";
+  const title = (match[2] ?? "").trim();
+  if (
+    sectionName.length === 0 ||
+    sectionName.length > TODO_SECTION_NAME_MAX_LENGTH ||
+    title.length === 0 ||
+    title.length > TODO_TITLE_MAX_LENGTH
+  ) {
+    return null;
+  }
+  return { listName, sectionName, title };
+}
+
+/** Used once every palette color is already taken by some list. */
+export function fallbackTodoColor(listName: string): TodoColor {
+  let hash = 2166136261;
+  for (const char of listName) {
+    hash ^= char.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 16777619);
+  }
+  return TODO_COLORS[(hash >>> 0) % TODO_COLORS.length] ?? "blue";
+}
+
+/**
+ * An explicit list or section wins over the `#List/Section` prefix. Omitted
+ * fields fall back to the prefix, then to empty (uncategorized / no section).
+ */
+export function resolveTodoPlacement(
+  title: string,
+  explicit: { listName?: string; sectionName?: string },
+): { title: string; listName: string; sectionName: string } {
+  const parsed = parseTitlePrefix(title);
+  const cleanTitle = (parsed?.title ?? title).trim();
+  return {
+    title: cleanTitle,
+    listName: (explicit.listName !== undefined ? explicit.listName : (parsed?.listName ?? "")).trim(),
+    sectionName: (
+      explicit.sectionName !== undefined ? explicit.sectionName : (parsed?.sectionName ?? "")
+    ).trim(),
+  };
+}
 
 export type TodoRpcContract = typeof rpcContract;

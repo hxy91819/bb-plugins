@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import {
   definePluginApp,
   useBbNavigate,
@@ -10,12 +10,17 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import {
   TODO_CHANGED_EVENT,
+  TODO_COLORS,
   TODO_FORMAL_BUCKETS,
   TODO_START_RELATED_LIMIT,
+  parseTitlePrefix,
+  type TodoColor,
   type TodoCounts,
   type TodoFormalBucket,
   type TodoItem,
+  type TodoListSummary,
   type TodoLogEntry,
+  type TodoRevision,
   type TodoSnapshot,
   type TodoThreadLink,
   type rpcContract,
@@ -35,12 +40,26 @@ const BUCKET_CAPTION: Record<TodoFormalBucket, string> = {
   waiting: "等待中",
 };
 
+/** Saturated dots that stay visible on both light and dark surfaces. Text stays foreground. */
+const COLOR_STYLE: Record<TodoColor, { solid: string; soft: string }> = {
+  blue: { solid: "#007AFF", soft: "rgba(0,122,255,0.14)" },
+  orange: { solid: "#FF9F0A", soft: "rgba(255,159,10,0.18)" },
+  green: { solid: "#34C759", soft: "rgba(52,199,89,0.16)" },
+  purple: { solid: "#AF52DE", soft: "rgba(175,82,222,0.16)" },
+  rose: { solid: "#FF375F", soft: "rgba(255,55,95,0.14)" },
+  teal: { solid: "#30B0C7", soft: "rgba(48,176,199,0.16)" },
+  amber: { solid: "#C48A00", soft: "rgba(196,138,0,0.18)" },
+  indigo: { solid: "#5856D6", soft: "rgba(88,86,214,0.16)" },
+};
+
 const fieldClassName =
-  "w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+  "w-full touch-manipulation rounded-lg border border-border bg-background px-2.5 py-1.5 text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm";
 const quietButtonClassName =
-  "cursor-pointer rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50";
+  "touch-manipulation cursor-pointer rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50";
 const primaryButtonClassName =
-  "cursor-pointer rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50";
+  "touch-manipulation cursor-pointer rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50";
+const iconButtonClassName =
+  "touch-manipulation flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50";
 
 const timeFormatter = new Intl.DateTimeFormat("zh-CN", {
   month: "numeric",
@@ -64,6 +83,15 @@ function shortThreadId(threadId: string): string {
 
 function isRunningStatus(status: string | null | undefined): boolean {
   return status === "active" || status === "starting";
+}
+
+function actorLabel(actor: string): string {
+  return actor.startsWith("agent:") ? `@thread:${actor.slice("agent:".length)}` : "人工";
+}
+
+function colorOf(lists: TodoListSummary[], listName: string): TodoColor | null {
+  if (listName.length === 0) return null;
+  return lists.find((list) => list.name === listName)?.color ?? null;
 }
 
 function PlusIcon() {
@@ -114,12 +142,28 @@ function ChevronIcon({ open }: { open: boolean }) {
   );
 }
 
-/** Quiet chips that jump into the BB threads an agent linked. */
+function PlayIcon() {
+  return (
+    <svg viewBox="0 0 12 12" aria-hidden="true" className="h-3 w-3">
+      <path d="M3.2 1.8v8.4L10 6 3.2 1.8Z" fill="currentColor" />
+    </svg>
+  );
+}
+
+function checkStyle(color: TodoColor | null, checked: boolean): CSSProperties | undefined {
+  if (!color) return undefined;
+  const solid = COLOR_STYLE[color].solid;
+  return checked
+    ? { borderColor: solid, backgroundColor: solid, color: "#fff" }
+    : { borderColor: solid, backgroundColor: "transparent", color: "transparent" };
+}
+
+/** Full session chips. Used in the inbox and inside an expanded row, never on the collapsed rail. */
 function ThreadCapsules({ threads }: { threads: TodoThreadLink[] }) {
   const navigate = useBbNavigate();
   if (threads.length === 0) return null;
   return (
-    <div className="flex max-w-[55%] min-w-0 flex-wrap items-center justify-end gap-1">
+    <div className="flex min-w-0 flex-wrap items-center gap-1">
       {threads.map((link) => (
         <button
           key={link.threadId}
@@ -130,20 +174,53 @@ function ThreadCapsules({ threads }: { threads: TodoThreadLink[] }) {
             event.stopPropagation();
             navigate.toThread(link.threadId);
           }}
-          className="inline-flex max-w-40 min-w-0 cursor-pointer items-center gap-1.5 rounded-full border border-border bg-background px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="inline-flex max-w-full min-w-0 touch-manipulation cursor-pointer items-center gap-1.5 rounded-full border border-border bg-background px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <span
             aria-hidden="true"
             className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-              isRunningStatus(link.threadStatus)
-                ? "animate-pulse bg-primary"
-                : "bg-muted-foreground"
+              isRunningStatus(link.threadStatus) ? "animate-pulse bg-primary" : "bg-muted-foreground"
             }`}
           />
           <span className="truncate">{threadLabel(link)}</span>
         </button>
       ))}
     </div>
+  );
+}
+
+function ThreadCountBadge({
+  item,
+  onShowThreads,
+}: {
+  item: TodoItem;
+  onShowThreads(): void;
+}) {
+  const navigate = useBbNavigate();
+  if (item.threads.length === 0) return null;
+  const running = item.threads.some((link) => isRunningStatus(link.threadStatus));
+  const single = item.threads.length === 1 ? item.threads[0] : null;
+  const label = single ? `打开会话 ${threadLabel(single)}` : `查看 ${item.threads.length} 个关联会话`;
+  return (
+    <button
+      type="button"
+      title={item.threads.map((link) => threadLabel(link)).join("\n")}
+      aria-label={label}
+      onClick={(event) => {
+        event.stopPropagation();
+        if (single) navigate.toThread(single.threadId);
+        else onShowThreads();
+      }}
+      className="inline-flex h-6 touch-manipulation shrink-0 cursor-pointer items-center gap-1 rounded-full border border-border bg-background px-2 text-[11px] tabular-nums text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <span
+        aria-hidden="true"
+        className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+          running ? "animate-pulse bg-primary" : "bg-muted-foreground"
+        }`}
+      />
+      <span>{item.threads.length}</span>
+    </button>
   );
 }
 
@@ -170,7 +247,7 @@ function BucketPills({
             type="button"
             aria-pressed={active}
             onClick={() => onChange(bucket)}
-            className={`cursor-pointer rounded-full px-2 py-0.5 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+            className={`touch-manipulation cursor-pointer rounded-full px-2 py-0.5 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
               active
                 ? "bg-background text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground"
@@ -184,11 +261,12 @@ function BucketPills({
   );
 }
 
-/** The one-line add bar: type a title, press Enter, done. */
 function QuickAdd({
+  inheritList,
   onAdded,
   onError,
 }: {
+  inheritList: string | null;
   onAdded(): void;
   onError(message: string): void;
 }) {
@@ -202,8 +280,13 @@ function QuickAdd({
     const trimmed = title.trim();
     if (trimmed.length === 0 || adding) return;
     setAdding(true);
+    const typedList = parseTitlePrefix(trimmed)?.listName;
     try {
-      await rpc.call("quickAdd", { title: trimmed, bucket });
+      await rpc.call("quickAdd", {
+        title: trimmed,
+        bucket,
+        ...(inheritList && !typedList ? { listName: inheritList } : {}),
+      });
       setTitle("");
       onAdded();
     } catch {
@@ -215,14 +298,14 @@ function QuickAdd({
 
   return (
     <div className="rounded-2xl border border-border bg-card p-2 shadow-sm transition-shadow focus-within:border-primary/40 focus-within:shadow-md focus-within:ring-2 focus-within:ring-ring">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
           aria-label="添加待办"
           title="添加待办"
           disabled={adding || title.trim().length === 0}
           onClick={() => void submit()}
-          className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-40"
+          className="flex h-8 w-8 shrink-0 touch-manipulation cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-40"
         >
           <PlusIcon />
         </button>
@@ -240,14 +323,15 @@ function QuickAdd({
           }}
           onKeyDown={(event) => {
             if (event.key !== "Enter") return;
-            // Enter that confirms an IME candidate must never create a todo.
             if (composing.current || event.nativeEvent.isComposing) return;
             event.preventDefault();
             void submit();
           }}
-          className="min-w-0 flex-1 bg-transparent py-1 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+          className="min-w-0 flex-1 bg-transparent py-1 text-base text-foreground placeholder:text-muted-foreground focus:outline-none sm:text-sm"
         />
-        <BucketPills value={bucket} onChange={setBucket} />
+        <div className="basis-full sm:basis-auto">
+          <BucketPills value={bucket} onChange={setBucket} />
+        </div>
       </div>
     </div>
   );
@@ -289,14 +373,6 @@ function InboxRow({
     }
   };
 
-  const accept = () =>
-    void run("accept", { id: item.id, action: "accept", bucket: acceptBucket });
-
-  const confirmMerge = () => {
-    if (mergeInto.length === 0) return;
-    void run("merge", { id: item.id, action: "merge", intoId: mergeInto });
-  };
-
   return (
     <li className="rounded-xl border border-border bg-background p-3">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
@@ -307,6 +383,12 @@ function InboxRow({
         <span className="text-muted-foreground">来源：</span>
         {item.proposalReason || "Agent 从最近的记录中提议"}
       </p>
+      {item.listName ? (
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          建议归入 {item.listName}
+          {item.sectionName ? ` / ${item.sectionName}` : ""}
+        </p>
+      ) : null}
       <div className="mt-2">
         <ThreadCapsules threads={item.threads} />
       </div>
@@ -316,7 +398,7 @@ function InboxRow({
             aria-label={`采纳 ${item.id} 到分组`}
             value={acceptBucket}
             onChange={(event) => setAcceptBucket(event.target.value as TodoFormalBucket)}
-            className="cursor-pointer rounded-full bg-transparent px-1.5 py-0.5 text-[11px] text-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="touch-manipulation cursor-pointer rounded-full bg-transparent px-1.5 py-0.5 text-base text-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
           >
             {FORMAL_BUCKETS.map((bucket) => (
               <option key={bucket} value={bucket}>
@@ -327,7 +409,7 @@ function InboxRow({
           <button
             type="button"
             disabled={pending !== null}
-            onClick={accept}
+            onClick={() => void run("accept", { id: item.id, action: "accept", bucket: acceptBucket })}
             className={primaryButtonClassName}
           >
             采纳
@@ -359,7 +441,7 @@ function InboxRow({
             aria-label={`并入目标 ${item.id}`}
             value={mergeInto}
             onChange={(event) => setMergeInto(event.target.value)}
-            className="min-w-0 flex-1 cursor-pointer rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="min-w-0 flex-1 touch-manipulation cursor-pointer rounded-md border border-border bg-background px-2 py-1 text-base text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
           >
             {targets.length === 0 ? <option value="">暂无正式待办可并入</option> : null}
             {targets.map((target) => (
@@ -371,7 +453,10 @@ function InboxRow({
           <button
             type="button"
             disabled={pending !== null || mergeInto.length === 0}
-            onClick={confirmMerge}
+            onClick={() => {
+              if (mergeInto.length === 0) return;
+              void run("merge", { id: item.id, action: "merge", intoId: mergeInto });
+            }}
             className={primaryButtonClassName}
           >
             确认并入
@@ -415,13 +500,7 @@ function InboxSection({
       </div>
       <ul className="space-y-2">
         {items.map((item) => (
-          <InboxRow
-            key={item.id}
-            item={item}
-            targets={targets}
-            onChanged={onChanged}
-            onError={onError}
-          />
+          <InboxRow key={item.id} item={item} targets={targets} onChanged={onChanged} onError={onError} />
         ))}
       </ul>
     </section>
@@ -431,16 +510,17 @@ function InboxSection({
 function StartSessionButton({
   item,
   onError,
+  variant,
 }: {
   item: TodoItem;
   onError(message: string): void;
+  variant: "icon" | "label";
 }) {
   const rpc = useRpc<typeof rpcContract>();
   const navigate = useBbNavigate();
   const [pending, setPending] = useState(false);
   const carried = Math.min(item.threads.length, TODO_START_RELATED_LIMIT);
-  const hint =
-    carried > 0 ? `开启新会话并带入 ${carried} 个关联会话上下文` : "为此待办开启新会话";
+  const hint = carried > 0 ? `开启新会话并带入 ${carried} 个关联会话上下文` : "为此待办开启新会话";
 
   const start = async () => {
     if (pending) return;
@@ -470,9 +550,13 @@ function StartSessionButton({
         event.stopPropagation();
         void start();
       }}
-      className="inline-flex shrink-0 cursor-pointer items-center rounded-full border border-border bg-background px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50"
+      className={
+        variant === "icon"
+          ? iconButtonClassName
+          : "inline-flex shrink-0 touch-manipulation cursor-pointer items-center rounded-full border border-border bg-background px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50"
+      }
     >
-      {pending ? "开启中…" : "▶ 新会话"}
+      {pending ? (variant === "icon" ? "…" : "开启中…") : variant === "icon" ? <PlayIcon /> : "▶ 开启新会话"}
     </button>
   );
 }
@@ -490,7 +574,7 @@ function LogEntry({ log }: { log: TodoLogEntry }) {
             type="button"
             aria-label={`打开进展会话 ${shortThreadId(threadId)}`}
             onClick={() => navigate.toThread(threadId)}
-            className="cursor-pointer rounded text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="touch-manipulation cursor-pointer rounded text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {shortThreadId(threadId)}
           </button>
@@ -500,14 +584,15 @@ function LogEntry({ log }: { log: TodoLogEntry }) {
   );
 }
 
-/** Quiet inline editor that opens under the row instead of a modal. */
 function TodoDetails({
   item,
+  listNames,
   onChanged,
   onError,
   onCollapse,
 }: {
   item: TodoItem;
+  listNames: string[];
   onChanged(): void;
   onError(message: string): void;
   onCollapse(): void;
@@ -517,6 +602,8 @@ function TodoDetails({
   const [bucket, setBucket] = useState<TodoFormalBucket>(item.bucket as TodoFormalBucket);
   const [nextStep, setNextStep] = useState(item.nextStep);
   const [notes, setNotes] = useState(item.notes);
+  const [listName, setListName] = useState(item.listName);
+  const [sectionName, setSectionName] = useState(item.sectionName);
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -525,21 +612,20 @@ function TodoDetails({
     bucket: item.bucket as TodoFormalBucket,
     nextStep: item.nextStep,
     notes: item.notes,
+    listName: item.listName,
+    sectionName: item.sectionName,
   });
   const seenId = useRef(item.id);
-  const draftRef = useRef({ title, bucket, nextStep, notes });
-  draftRef.current = { title, bucket, nextStep, notes };
+  const draftRef = useRef({ title, bucket, nextStep, notes, listName, sectionName });
+  draftRef.current = { title, bucket, nextStep, notes, listName, sectionName };
 
-  const draftIsDirty = (draft: {
-    title: string;
-    bucket: TodoFormalBucket;
-    nextStep: string;
-    notes: string;
-  }) =>
+  const draftIsDirty = (draft: typeof draftRef.current) =>
     draft.title.trim() !== baseline.current.title ||
     draft.bucket !== baseline.current.bucket ||
     draft.nextStep !== baseline.current.nextStep ||
-    draft.notes !== baseline.current.notes;
+    draft.notes !== baseline.current.notes ||
+    draft.listName.trim() !== baseline.current.listName ||
+    draft.sectionName.trim() !== baseline.current.sectionName;
 
   useEffect(() => {
     const next = {
@@ -547,6 +633,8 @@ function TodoDetails({
       bucket: item.bucket as TodoFormalBucket,
       nextStep: item.nextStep,
       notes: item.notes,
+      listName: item.listName,
+      sectionName: item.sectionName,
     };
     const idChanged = seenId.current !== item.id;
     seenId.current = item.id;
@@ -556,6 +644,8 @@ function TodoDetails({
       setBucket(next.bucket);
       setNextStep(next.nextStep);
       setNotes(next.notes);
+      setListName(next.listName);
+      setSectionName(next.sectionName);
       setSaved(false);
       return;
     }
@@ -564,17 +654,21 @@ function TodoDetails({
       next.title !== baseline.current.title ||
       next.bucket !== baseline.current.bucket ||
       next.nextStep !== baseline.current.nextStep ||
-      next.notes !== baseline.current.notes;
+      next.notes !== baseline.current.notes ||
+      next.listName !== baseline.current.listName ||
+      next.sectionName !== baseline.current.sectionName;
     baseline.current = next;
     if (!changed) return;
     setTitle(next.title);
     setBucket(next.bucket);
     setNextStep(next.nextStep);
     setNotes(next.notes);
+    setListName(next.listName);
+    setSectionName(next.sectionName);
     setSaved(false);
-  }, [item.id, item.title, item.bucket, item.nextStep, item.notes, item.updatedAt]);
+  }, [item.id, item.title, item.bucket, item.nextStep, item.notes, item.listName, item.sectionName, item.updatedAt]);
 
-  const dirty = draftIsDirty({ title, bucket, nextStep, notes });
+  const dirty = draftIsDirty({ title, bucket, nextStep, notes, listName, sectionName });
 
   const save = async () => {
     if (saving) return;
@@ -583,11 +677,20 @@ function TodoDetails({
       onError("标题不能为空。");
       return;
     }
-    const patch: { title?: string; bucket?: TodoFormalBucket; nextStep?: string; notes?: string } = {};
+    const patch: {
+      title?: string;
+      bucket?: TodoFormalBucket;
+      nextStep?: string;
+      notes?: string;
+      listName?: string;
+      sectionName?: string;
+    } = {};
     if (trimmedTitle !== baseline.current.title) patch.title = trimmedTitle;
     if (bucket !== baseline.current.bucket) patch.bucket = bucket;
     if (nextStep !== baseline.current.nextStep) patch.nextStep = nextStep;
     if (notes !== baseline.current.notes) patch.notes = notes;
+    if (listName.trim() !== baseline.current.listName) patch.listName = listName.trim();
+    if (sectionName.trim() !== baseline.current.sectionName) patch.sectionName = sectionName.trim();
     if (Object.keys(patch).length === 0) return;
     setSaving(true);
     try {
@@ -597,8 +700,12 @@ function TodoDetails({
         bucket,
         nextStep,
         notes,
+        listName: listName.trim(),
+        sectionName: sectionName.trim(),
       };
       setTitle(trimmedTitle);
+      setListName(listName.trim());
+      setSectionName(sectionName.trim());
       setSaved(true);
       onChanged();
     } catch {
@@ -632,6 +739,12 @@ function TodoDetails({
         }
       }}
     >
+      {item.threads.length > 0 ? (
+        <div className="mb-3 space-y-1">
+          <h3 className="text-[11px] font-medium text-muted-foreground">关联会话</h3>
+          <ThreadCapsules threads={item.threads} />
+        </div>
+      ) : null}
       <div className="grid gap-2 md:grid-cols-2">
         <label className="space-y-1 md:col-span-2">
           <span className="text-[11px] text-muted-foreground">标题</span>
@@ -669,6 +782,29 @@ function TodoDetails({
             className={fieldClassName}
           />
         </label>
+        <label className="space-y-1">
+          <span className="text-[11px] text-muted-foreground">项目列表</span>
+          <input
+            aria-label={`项目列表 ${item.id}`}
+            value={listName}
+            maxLength={80}
+            list="todo-list-names"
+            placeholder="例如 LightSpace"
+            onChange={(event) => setListName(event.target.value)}
+            className={fieldClassName}
+          />
+        </label>
+        <label className="space-y-1">
+          <span className="text-[11px] text-muted-foreground">分组（Section）</span>
+          <input
+            aria-label={`分组（Section） ${item.id}`}
+            value={sectionName}
+            maxLength={80}
+            placeholder="列表内的子分组"
+            onChange={(event) => setSectionName(event.target.value)}
+            className={fieldClassName}
+          />
+        </label>
         <label className="space-y-1 md:col-span-2">
           <span className="text-[11px] text-muted-foreground">备注</span>
           <textarea
@@ -682,26 +818,24 @@ function TodoDetails({
           />
         </label>
       </div>
+      <datalist id="todo-list-names">
+        {listNames.map((name) => (
+          <option key={name} value={name} />
+        ))}
+      </datalist>
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          disabled={saving || !dirty}
-          onClick={() => void save()}
-          className={primaryButtonClassName}
-        >
+        <button type="button" disabled={saving || !dirty} onClick={() => void save()} className={primaryButtonClassName}>
           {saving ? "保存中…" : "保存"}
         </button>
-        <span className="text-[11px] text-muted-foreground">
-          {saved && !dirty ? "已保存" : "⌘/Ctrl + Enter 保存"}
-        </span>
-        <StartSessionButton item={item} onError={onError} />
+        <span className="text-[11px] text-muted-foreground">{saved && !dirty ? "已保存" : "⌘/Ctrl + Enter 保存"}</span>
+        <StartSessionButton item={item} onError={onError} variant="label" />
         <span className="flex-1" />
         <button
           type="button"
           disabled={saving || removing}
           onClick={() => void remove()}
           aria-label={`删除 ${item.id}`}
-          className="cursor-pointer rounded-md px-2 py-1 text-xs text-destructive transition-colors hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+          className="touch-manipulation cursor-pointer rounded-md px-2 py-1 text-xs text-destructive transition-colors hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
         >
           删除
         </button>
@@ -724,16 +858,22 @@ function TodoDetails({
 
 function TodoRow({
   item,
+  lists,
+  showListChip,
   expanded,
   divider,
   onToggle,
+  onShowThreads,
   onChanged,
   onError,
 }: {
   item: TodoItem;
+  lists: TodoListSummary[];
+  showListChip: boolean;
   expanded: boolean;
   divider: boolean;
   onToggle(): void;
+  onShowThreads(): void;
   onChanged(): void;
   onError(message: string): void;
 }) {
@@ -743,6 +883,8 @@ function TodoRow({
   const detailsId = `todo-details-${item.id}`;
   const completed = item.completedAt !== null;
   const checked = completed || pendingCompleted;
+  const color = colorOf(lists, item.listName);
+  const listNames = lists.map((list) => list.name);
 
   const toggleCompleted = async () => {
     if (busy) return;
@@ -766,10 +908,10 @@ function TodoRow({
   };
 
   return (
-    <li className={divider ? "border-t border-border" : undefined}>
+    <div className={divider ? "border-t border-border" : undefined} data-todo-row>
       <div
         onClick={onSurfaceClick}
-        className={`group flex items-start gap-3 px-3 py-2.5 transition-colors ${
+        className={`group flex items-start gap-1.5 px-2.5 py-2.5 transition-colors sm:gap-2 sm:px-3.5 ${
           expanded ? "bg-muted" : "hover:bg-accent"
         }`}
       >
@@ -783,105 +925,238 @@ function TodoRow({
             event.stopPropagation();
             void toggleCompleted();
           }}
-          className={`mt-0.5 flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-full border transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default ${
-            checked
-              ? "border-primary bg-primary text-primary-foreground"
-              : "border-muted-foreground bg-transparent text-transparent hover:border-primary"
+          style={checkStyle(color, checked)}
+          className={`mt-0.5 flex h-5 w-5 shrink-0 touch-manipulation cursor-pointer items-center justify-center rounded-full border transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default ${
+            color
+              ? ""
+              : checked
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-muted-foreground bg-transparent text-transparent hover:border-primary"
           }`}
         >
           <CheckIcon />
         </button>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-            <span className="break-words text-sm leading-5 text-foreground">{item.title}</span>
-            <span className="text-[11px] tabular-nums text-muted-foreground">{item.id}</span>
+        <div className="min-w-0 flex-1" data-todo-main>
+          <div className="float-right ml-1 flex shrink-0 items-center gap-1" data-todo-rail>
+            <ThreadCountBadge item={item} onShowThreads={onShowThreads} />
+            {item.completedAt === null ? (
+              <StartSessionButton item={item} onError={onError} variant="icon" />
+            ) : null}
+            <button
+              type="button"
+              aria-label={expanded ? `收起 ${item.id} 详情` : `展开 ${item.id} 详情`}
+              aria-expanded={expanded}
+              aria-controls={expanded ? detailsId : undefined}
+              onClick={(event) => {
+                event.stopPropagation();
+                onToggle();
+              }}
+              className={iconButtonClassName}
+            >
+              <ChevronIcon open={expanded} />
+            </button>
           </div>
+          <p data-todo-title className="break-words text-sm font-medium leading-5 text-foreground">
+            {item.title}
+          </p>
           {item.nextStep ? (
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">
-              下一步：{item.nextStep}
+            <p className="mt-0.5 line-clamp-2 break-words text-xs leading-5 text-muted-foreground sm:line-clamp-1">
+              {item.nextStep}
             </p>
           ) : null}
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          <ThreadCapsules threads={item.threads} />
-          {item.completedAt === null ? (
-            <StartSessionButton item={item} onError={onError} />
-          ) : null}
-          <button
-            type="button"
-            aria-label={expanded ? `收起 ${item.id} 详情` : `展开 ${item.id} 详情`}
-            aria-expanded={expanded}
-            aria-controls={expanded ? detailsId : undefined}
-            onClick={(event) => {
-              event.stopPropagation();
-              onToggle();
-            }}
-            className="flex h-6 w-6 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <ChevronIcon open={expanded} />
-          </button>
+          <div className="clear-both mt-1 flex flex-wrap items-center gap-1.5">
+            {showListChip && item.listName ? (
+              <span
+                className="inline-flex max-w-full items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] text-foreground"
+                style={
+                  color
+                    ? { backgroundColor: COLOR_STYLE[color].soft }
+                    : undefined
+                }
+              >
+                <span
+                  aria-hidden="true"
+                  className="h-1.5 w-1.5 shrink-0 rounded-full"
+                  style={color ? { backgroundColor: COLOR_STYLE[color].solid } : undefined}
+                />
+                <span className="truncate">{item.listName}</span>
+              </span>
+            ) : null}
+            <span className="text-[11px] tabular-nums text-muted-foreground">{item.id}</span>
+          </div>
         </div>
       </div>
       {expanded ? (
-        <div id={detailsId} className="border-t border-border bg-card px-3 py-3">
+        <div id={detailsId} className="border-t border-border bg-card px-2.5 py-3 sm:px-3.5">
           <TodoDetails
             item={item}
+            listNames={listNames}
             onChanged={onChanged}
             onError={onError}
             onCollapse={onToggle}
           />
         </div>
       ) : null}
-    </li>
+    </div>
+  );
+}
+
+function ListHeading({ name, color }: { name: string; color: TodoColor | null }) {
+  const label = name.length > 0 ? name : "未归类";
+  return (
+    <div className="flex items-center gap-2 px-2.5 pt-2">
+      <span
+        aria-hidden="true"
+        className="h-2.5 w-2.5 shrink-0 rounded-full"
+        style={color ? { backgroundColor: COLOR_STYLE[color].solid } : { backgroundColor: "var(--muted-foreground)" }}
+      />
+      <h3 className="text-[13px] font-semibold text-foreground">{label}</h3>
+    </div>
+  );
+}
+
+function SectionHeading({
+  sectionName,
+  count,
+  color,
+  collapsed,
+  onToggle,
+}: {
+  sectionName: string;
+  count: number;
+  color: TodoColor | null;
+  collapsed: boolean;
+  onToggle(): void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-expanded={!collapsed}
+      onClick={onToggle}
+      className="flex w-full touch-manipulation cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <ChevronIcon open={!collapsed} />
+      <span
+        className="min-w-0 truncate text-xs font-semibold"
+        style={color ? { color: COLOR_STYLE[color].solid } : undefined}
+      >
+        {sectionName}
+      </span>
+      <span className="text-[11px] tabular-nums text-muted-foreground">{count}</span>
+    </button>
   );
 }
 
 function TodoSection({
   bucket,
   items,
+  lists,
+  listFilter,
+  groupByList,
+  collapsedSections,
   expandedId,
+  onToggleSection,
   onToggle,
+  onShowThreads,
   onChanged,
   onError,
 }: {
   bucket: TodoFormalBucket;
   items: TodoItem[];
+  lists: TodoListSummary[];
+  listFilter: string | null;
+  groupByList: boolean;
+  collapsedSections: ReadonlySet<string>;
   expandedId: string | null;
+  onToggleSection(key: string): void;
   onToggle(id: string): void;
+  onShowThreads(id: string): void;
   onChanged(): void;
   onError(message: string): void;
 }) {
-  if (items.length === 0) return null;
+  const visible = items.filter((item) => listFilter === null || item.listName === listFilter);
+  if (visible.length === 0) return null;
+  const grouped = listFilter !== null || groupByList;
+  const showListHeaders = groupByList && listFilter === null;
+  const showChip = listFilter === null && !groupByList;
+
+  const listOrder = showListHeaders
+    ? [...new Set(visible.map((item) => item.listName))]
+    : [listFilter ?? ""];
+
+  const renderRows = (rows: TodoItem[], offset: number) =>
+    rows.map((item, index) => (
+      <TodoRow
+        key={item.id}
+        item={item}
+        lists={lists}
+        showListChip={showChip}
+        divider={offset + index > 0}
+        expanded={expandedId === item.id}
+        onToggle={() => onToggle(item.id)}
+        onShowThreads={() => onShowThreads(item.id)}
+        onChanged={onChanged}
+        onError={onError}
+      />
+    ));
+
+  let rendered = 0;
+  const body = grouped
+    ? listOrder.map((listName) => {
+        const inList = showListHeaders ? visible.filter((item) => item.listName === listName) : visible;
+        const loose = inList.filter((item) => item.sectionName.length === 0);
+        const sectionNames = [...new Set(inList.map((item) => item.sectionName).filter((name) => name.length > 0))];
+        const color = colorOf(lists, listName);
+        const looseStart = rendered;
+        rendered += loose.length;
+        return (
+          <div key={listName || "loose"}>
+            {showListHeaders ? <ListHeading name={listName} color={color} /> : null}
+            {renderRows(loose, looseStart)}
+            {sectionNames.map((sectionName) => {
+              const key = `${listName}\0${sectionName}`;
+              const rows = inList.filter((item) => item.sectionName === sectionName);
+              const collapsed = collapsedSections.has(key);
+              const start = rendered;
+              rendered += rows.length;
+              return (
+                <div key={key}>
+                  <SectionHeading
+                    sectionName={sectionName}
+                    count={rows.length}
+                    color={color}
+                    collapsed={collapsed}
+                    onToggle={() => onToggleSection(key)}
+                  />
+                  {collapsed ? null : renderRows(rows, start)}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })
+    : renderRows(visible, 0);
+
   return (
     <section aria-label={`${BUCKET_LABEL[bucket]} 待办`} className="space-y-2">
       <div className="flex items-baseline gap-2 px-2">
         <h2 className="text-[13px] font-semibold text-foreground">{BUCKET_LABEL[bucket]}</h2>
-        <span className="text-[11px] tabular-nums text-muted-foreground">{items.length}</span>
+        <span className="text-[11px] tabular-nums text-muted-foreground">{visible.length}</span>
       </div>
-      <ul className="overflow-hidden rounded-2xl border border-border bg-card">
-        {items.map((item, index) => (
-          <TodoRow
-            key={item.id}
-            item={item}
-            divider={index > 0}
-            expanded={expandedId === item.id}
-            onToggle={() => onToggle(item.id)}
-            onChanged={onChanged}
-            onError={onError}
-          />
-        ))}
-      </ul>
+      <div className="overflow-hidden rounded-2xl border border-border bg-card">{body}</div>
     </section>
   );
 }
 
 function DoneRow({
   item,
+  lists,
   divider,
   onChanged,
   onError,
 }: {
   item: TodoItem;
+  lists: TodoListSummary[];
   divider: boolean;
   onChanged(): void;
   onError(message: string): void;
@@ -889,6 +1164,7 @@ function DoneRow({
   const rpc = useRpc<typeof rpcContract>();
   const [busy, setBusy] = useState(false);
   const [pendingRestore, setPendingRestore] = useState(false);
+  const color = colorOf(lists, item.listName);
   if (pendingRestore) return null;
 
   const restore = async () => {
@@ -907,7 +1183,7 @@ function DoneRow({
   };
 
   return (
-    <li className={`flex items-center gap-3 px-3 py-2 ${divider ? "border-t border-border" : ""}`}>
+    <div className={`flex items-start gap-2 px-2.5 py-2 sm:px-3.5 ${divider ? "border-t border-border" : ""}`}>
       <button
         type="button"
         role="checkbox"
@@ -915,24 +1191,28 @@ function DoneRow({
         aria-label={`恢复 ${item.id}`}
         disabled={busy}
         onClick={() => void restore()}
-        className="flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-full border border-primary bg-primary text-primary-foreground transition-all duration-150 hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default"
+        style={checkStyle(color, true)}
+        className={`mt-0.5 flex h-5 w-5 shrink-0 touch-manipulation cursor-pointer items-center justify-center rounded-full border text-primary-foreground transition-all duration-150 hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default ${
+          color ? "" : "border-primary bg-primary"
+        }`}
       >
         <CheckIcon />
       </button>
-      <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{item.title}</span>
-      <span className="text-[11px] tabular-nums text-muted-foreground">{item.id}</span>
-      {item.completedAt ? (
-        <time className="text-[11px] text-muted-foreground" dateTime={item.completedAt}>
-          {formatTime(item.completedAt)}
-        </time>
-      ) : null}
-    </li>
+      <div className="min-w-0 flex-1">
+        <p className="break-words text-sm text-muted-foreground">{item.title}</p>
+        <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+          <span className="tabular-nums">{item.id}</span>
+          {item.completedAt ? <time dateTime={item.completedAt}>{formatTime(item.completedAt)}</time> : null}
+        </div>
+      </div>
+    </div>
   );
 }
 
 function CompletedSection({
   items,
   count,
+  lists,
   expanded,
   onToggleExpanded,
   onChanged,
@@ -940,6 +1220,7 @@ function CompletedSection({
 }: {
   items: TodoItem[];
   count: number;
+  lists: TodoListSummary[];
   expanded: boolean;
   onToggleExpanded(): void;
   onChanged(): void;
@@ -951,7 +1232,7 @@ function CompletedSection({
         type="button"
         aria-expanded={expanded}
         onClick={onToggleExpanded}
-        className="flex w-full cursor-pointer items-center justify-between rounded-lg px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex w-full touch-manipulation cursor-pointer items-center justify-between rounded-lg px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <span className="flex items-center gap-2">
           <ChevronIcon open={expanded} />
@@ -960,14 +1241,15 @@ function CompletedSection({
         <span className="tabular-nums">{count}</span>
       </button>
       {expanded ? (
-        <ul className="animate-in fade-in slide-in-from-top-1 mt-1 overflow-hidden rounded-2xl border border-border bg-card duration-150">
+        <div className="animate-in fade-in slide-in-from-top-1 mt-1 overflow-hidden rounded-2xl border border-border bg-card duration-150">
           {items.length === 0 ? (
-            <li className="px-3 py-3 text-xs text-muted-foreground">还没有完成项。</li>
+            <div className="px-3 py-3 text-xs text-muted-foreground">还没有完成项。</div>
           ) : (
             items.map((item, index) => (
               <DoneRow
                 key={item.id}
                 item={item}
+                lists={lists}
                 divider={index > 0}
                 onChanged={onChanged}
                 onError={onError}
@@ -975,13 +1257,226 @@ function CompletedSection({
             ))
           )}
           {count > items.length ? (
-            <li className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
+            <div className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
               仅显示最近 {items.length} 项
-            </li>
+            </div>
           ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function HistorySection({
+  refreshToken,
+  onChanged,
+  onError,
+}: {
+  refreshToken: number;
+  onChanged(): void;
+  onError(message: string): void;
+}) {
+  const rpc = useRpc<typeof rpcContract>();
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<TodoRevision[] | null>(null);
+  const [pendingRev, setPendingRev] = useState<number | null>(null);
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  const load = useCallback(async () => {
+    try {
+      const result = await rpc.call("listRevisions", { limit: 20 });
+      if (mounted.current) setRows(result.revisions);
+    } catch {
+      if (mounted.current) onError("没能加载最近变更。");
+    }
+  }, [onError, rpc]);
+
+  useEffect(() => {
+    if (!open) return;
+    void load();
+  }, [load, open, refreshToken]);
+
+  const undo = async (rev: number) => {
+    if (pendingRev !== null) return;
+    setPendingRev(rev);
+    try {
+      await rpc.call("undoRevision", { rev });
+      onChanged();
+      await load();
+    } catch {
+      onError("没能撤销这次变更。");
+    } finally {
+      setPendingRev(null);
+    }
+  };
+
+  return (
+    <section className="pt-1">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full touch-manipulation cursor-pointer items-center justify-between rounded-lg px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <span className="flex items-center gap-2">
+          <ChevronIcon open={open} />
+          最近变更（可撤销）
+        </span>
+      </button>
+      {open ? (
+        <ul className="mt-1 overflow-hidden rounded-2xl border border-border bg-card">
+          {rows === null ? (
+            <li className="px-3 py-3 text-xs text-muted-foreground">加载中…</li>
+          ) : rows.length === 0 ? (
+            <li className="px-3 py-3 text-xs text-muted-foreground">还没有变更。</li>
+          ) : (
+            rows.map((revision, index) => {
+              const canUndo = revision.undoneAt === null && revision.action !== "undo";
+              return (
+                <li
+                  key={revision.rev}
+                  className={`flex items-start gap-2 px-2.5 py-2 sm:px-3.5 ${index > 0 ? "border-t border-border" : ""}`}
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="break-words text-xs text-foreground">{revision.summary}</p>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">
+                      <time dateTime={revision.createdAt}>{formatTime(revision.createdAt)}</time>
+                      <span> · {actorLabel(revision.actor)}</span>
+                      {revision.undoneAt ? <span> · 已撤销</span> : null}
+                    </p>
+                  </div>
+                  {canUndo ? (
+                    <button
+                      type="button"
+                      disabled={pendingRev !== null}
+                      aria-label={`撤销 ${revision.summary}`}
+                      onClick={() => void undo(revision.rev)}
+                      className={quietButtonClassName}
+                    >
+                      {pendingRev === revision.rev ? "撤销中…" : "撤销"}
+                    </button>
+                  ) : null}
+                </li>
+              );
+            })
+          )}
         </ul>
       ) : null}
     </section>
+  );
+}
+
+function ListBar({
+  lists,
+  uncategorized,
+  total,
+  selected,
+  groupByList,
+  onSelect,
+  onToggleGroup,
+  onRecolor,
+}: {
+  lists: TodoListSummary[];
+  uncategorized: number;
+  total: number;
+  selected: string | null;
+  groupByList: boolean;
+  onSelect(next: string | null): void;
+  onToggleGroup(): void;
+  onRecolor(listName: string, color: TodoColor): void;
+}) {
+  const [paletteFor, setPaletteFor] = useState<string | null>(null);
+  const selectedList = selected && selected.length > 0 ? lists.find((list) => list.name === selected) : undefined;
+
+  const capsule = (name: string, count: number, value: string | null, color: TodoColor | null) => {
+    const active = selected === value;
+    const style: CSSProperties | undefined =
+      active && color
+        ? {
+            backgroundColor: COLOR_STYLE[color].soft,
+            borderColor: COLOR_STYLE[color].solid,
+          }
+        : undefined;
+    return (
+      <button
+        key={name}
+        type="button"
+        aria-pressed={active}
+        onClick={() => onSelect(value)}
+        style={style}
+        className={`inline-flex touch-manipulation cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+          active ? "text-foreground" : "border-border text-muted-foreground hover:text-foreground"
+        }`}
+      >
+        {color ? (
+          <span
+            aria-hidden="true"
+            className="h-2 w-2 shrink-0 rounded-full"
+            style={{ backgroundColor: COLOR_STYLE[color].solid }}
+          />
+        ) : null}
+        <span>{name}</span>
+        <span className="tabular-nums">{count}</span>
+      </button>
+    );
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {capsule("全部", total, null, null)}
+      {lists.map((list) => capsule(list.name, list.openCount, list.name, list.color))}
+      {uncategorized > 0 ? capsule("未归类", uncategorized, "", null) : null}
+      {selectedList ? (
+        <span className="relative inline-flex items-center">
+          <button
+            type="button"
+            aria-label={`更换 ${selectedList.name} 的颜色`}
+            title="更换颜色"
+            onClick={() => setPaletteFor((current) => (current === selectedList.name ? null : selectedList.name))}
+            className="h-4 w-4 touch-manipulation cursor-pointer rounded-full border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            style={{ backgroundColor: COLOR_STYLE[selectedList.color].solid }}
+          />
+          {paletteFor === selectedList.name ? (
+            <span
+              role="listbox"
+              aria-label={`${selectedList.name} 的颜色`}
+              className="absolute top-6 left-0 z-10 flex gap-1 rounded-full border border-border bg-card p-1 shadow-sm"
+            >
+              {TODO_COLORS.map((color) => (
+                <button
+                  key={color}
+                  type="button"
+                  role="option"
+                  aria-selected={color === selectedList.color}
+                  aria-label={`颜色 ${color}`}
+                  onClick={() => {
+                    onRecolor(selectedList.name, color);
+                    setPaletteFor(null);
+                  }}
+                  className="h-4 w-4 touch-manipulation cursor-pointer rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  style={{ backgroundColor: COLOR_STYLE[color].solid }}
+                />
+              ))}
+            </span>
+          ) : null}
+        </span>
+      ) : null}
+      <button
+        type="button"
+        aria-pressed={groupByList}
+        onClick={onToggleGroup}
+        className={quietButtonClassName}
+      >
+        按项目分组
+      </button>
+    </div>
   );
 }
 
@@ -994,11 +1489,6 @@ function EmptyState() {
   );
 }
 
-/**
- * Navigation badge: inbox proposals win, then focus items. Any failure is
- * reported as "no badge" so a transient RPC error never becomes a crashed
- * navigation slot.
- */
 function useTodoBadge(): ExperimentalBadge | null {
   const rpc = useRpc<typeof rpcContract>();
   const [counts, setCounts] = useState<TodoCounts | null>(null);
@@ -1050,6 +1540,9 @@ function TodoPanel(_props: PluginNavPanelProps) {
   const [revision, setRevision] = useState(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showDone, setShowDone] = useState(false);
+  const [listFilter, setListFilter] = useState<string | null>(null);
+  const [groupByList, setGroupByList] = useState(false);
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => new Set());
 
   const refresh = useCallback(() => {
     setActionError(null);
@@ -1084,22 +1577,35 @@ function TodoPanel(_props: PluginNavPanelProps) {
   }, []);
 
   const formalItems = snapshot
-    ? [
-        ...snapshot.buckets.focus,
-        ...snapshot.buckets.later,
-        ...snapshot.buckets.waiting,
-      ]
+    ? [...snapshot.buckets.focus, ...snapshot.buckets.later, ...snapshot.buckets.waiting]
     : [];
+  const visibleFormal = formalItems.filter((item) => listFilter === null || item.listName === listFilter);
+  const uncategorized = formalItems.filter((item) => item.listName.length === 0).length;
+  const doneItems = snapshot
+    ? snapshot.done.filter((item) => listFilter === null || item.listName === listFilter)
+    : [];
+  const doneCount = snapshot ? (listFilter === null ? snapshot.counts.done : doneItems.length) : 0;
   const nothingOpen =
     snapshot !== null &&
     snapshot.counts.open === 0 &&
     snapshot.counts.inbox === 0 &&
     snapshot.counts.done === 0;
+  const selectedList = listFilter && listFilter.length > 0 ? listFilter : null;
+  const selectedColor = snapshot && selectedList ? colorOf(snapshot.lists, selectedList) : null;
+
+  const recolor = async (listName: string, color: TodoColor) => {
+    try {
+      await rpc.call("setListColor", { listName, color });
+      refresh();
+    } catch {
+      report(`没能更换 ${listName} 的颜色。`);
+    }
+  };
 
   return (
-    <div className="h-full overflow-y-auto bg-background text-foreground">
-      <div className="mx-auto w-full max-w-3xl space-y-6 p-4 md:p-6">
-        <QuickAdd onAdded={refresh} onError={report} />
+    <div className="h-full touch-manipulation overflow-y-auto bg-background text-foreground [--text-base:16px]">
+      <div className="mx-auto w-full max-w-3xl space-y-4 px-2.5 py-3 sm:space-y-6 sm:px-5 sm:py-5">
+        <QuickAdd inheritList={selectedList} onAdded={refresh} onError={report} />
         {actionError ? (
           <div
             role="alert"
@@ -1137,6 +1643,21 @@ function TodoPanel(_props: PluginNavPanelProps) {
           )
         ) : (
           <>
+            {snapshot.counts.open > 0 ? (
+              <ListBar
+                lists={snapshot.lists}
+                uncategorized={uncategorized}
+                total={snapshot.counts.open}
+                selected={listFilter}
+                groupByList={groupByList}
+                onSelect={setListFilter}
+                onToggleGroup={() => setGroupByList((value) => !value)}
+                onRecolor={(listName, color) => void recolor(listName, color)}
+              />
+            ) : null}
+            {selectedList ? (
+              <ListHeading name={selectedList} color={selectedColor} />
+            ) : null}
             <InboxSection
               items={snapshot.buckets.inbox}
               targets={formalItems}
@@ -1146,32 +1667,50 @@ function TodoPanel(_props: PluginNavPanelProps) {
             {nothingOpen ? (
               <EmptyState />
             ) : (
-              <div className="space-y-6">
+              <div className="space-y-4 sm:space-y-6">
+                {visibleFormal.length === 0 && listFilter !== null ? (
+                  <p className="px-2 text-xs text-muted-foreground">这个列表里还没有未完成待办。</p>
+                ) : null}
                 {FORMAL_BUCKETS.map((bucket) => (
                   <TodoSection
                     key={bucket}
                     bucket={bucket}
                     items={snapshot.buckets[bucket]}
+                    lists={snapshot.lists}
+                    listFilter={listFilter}
+                    groupByList={groupByList}
+                    collapsedSections={collapsedSections}
                     expandedId={expandedId}
+                    onToggleSection={(key) => {
+                      setCollapsedSections((current) => {
+                        const next = new Set(current);
+                        if (next.has(key)) next.delete(key);
+                        else next.add(key);
+                        return next;
+                      });
+                    }}
                     onToggle={(id) => {
                       setExpandedId((current) => (current === id ? null : id));
                     }}
+                    onShowThreads={(id) => setExpandedId(id)}
                     onChanged={refresh}
                     onError={report}
                   />
                 ))}
               </div>
             )}
-            {snapshot.counts.done > 0 ? (
+            {doneCount > 0 ? (
               <CompletedSection
-                items={snapshot.done}
-                count={snapshot.counts.done}
+                items={doneItems}
+                count={doneCount}
+                lists={snapshot.lists}
                 expanded={showDone}
                 onToggleExpanded={() => setShowDone((value) => !value)}
                 onChanged={refresh}
                 onError={report}
               />
             ) : null}
+            <HistorySection refreshToken={revision} onChanged={refresh} onError={report} />
           </>
         )}
       </div>

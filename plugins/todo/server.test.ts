@@ -9,6 +9,10 @@ import {
 import plugin from "./server";
 import {
   TODO_CHANGED_EVENT,
+  TODO_COLORS,
+  fallbackTodoColor,
+  parseTitlePrefix,
+  type TodoRevision,
   type TodoScanResult,
   type TodoSnapshot,
   type TodoItem,
@@ -784,6 +788,193 @@ test("bb todo start spawns a thread and links it back", async () => {
     assert.equal(overridden.projectId, "proj-explicit");
     assert.equal(overridden.threadId, "thr-spawned-3");
     assert.equal(spawned[2].projectId, "proj-explicit");
+  } finally {
+    await harness.lifecycle.dispose();
+  }
+});
+
+test("lists take distinct palette colors, titles can carry #List/Section, and undo restores deletes", async () => {
+  const { bb, harness } = fixture();
+  try {
+    await plugin(bb);
+    assert.deepEqual(parseTitlePrefix("#LightSpace/Hosting Station 写 demo 期方案"), {
+      listName: "LightSpace",
+      sectionName: "Hosting Station",
+      title: "写 demo 期方案",
+    });
+    assert.deepEqual(parseTitlePrefix("#LightSpace 双形态上架"), {
+      listName: "LightSpace",
+      sectionName: "",
+      title: "双形态上架",
+    });
+    assert.equal(parseTitlePrefix("#LightSpace"), null);
+    assert.equal(parseTitlePrefix("正文 #LightSpace 不会提取"), null);
+
+    const names = ["A", "B", "C", "D", "E", "F", "G", "H", "I"];
+    for (const name of names) {
+      await runJson(harness, ["add", `${name} 事项`, "--list", name]);
+    }
+    const colored = (await harness.behavior.callRpc("listSnapshot", {})) as TodoSnapshot;
+    assert.deepEqual(
+      colored.lists.map((list) => list.color),
+      [...TODO_COLORS, fallbackTodoColor("I")],
+    );
+    assert.deepEqual(
+      colored.lists.map((list) => list.name),
+      names,
+    );
+    const recolored = (await harness.behavior.callRpc("setListColor", {
+      listName: "A",
+      color: "rose",
+    })) as { name: string; color: string };
+    assert.equal(recolored.color, "rose");
+    const afterColor = (await runJson(harness, ["color", "B", "teal"])) as { color: string };
+    assert.equal(afterColor.color, "teal");
+
+    const parsed = (await runJson(harness, [
+      "add",
+      "#LightSpace/Hosting Station 写 demo 期方案",
+    ])) as TodoItem;
+    assert.equal(parsed.title, "写 demo 期方案");
+    assert.equal(parsed.listName, "LightSpace");
+    assert.equal(parsed.sectionName, "Hosting Station");
+    const overridden = (await runJson(harness, [
+      "add",
+      "#LightSpace 双形态上架",
+      "--list",
+      "Other",
+    ])) as TodoItem;
+    assert.equal(overridden.title, "双形态上架");
+    assert.equal(overridden.listName, "Other");
+    const plain = (await runJson(harness, ["add", "正文 #LightSpace 不会提取"])) as TodoItem;
+    assert.equal(plain.listName, "");
+    assert.equal(plain.title, "正文 #LightSpace 不会提取");
+
+    const listed = (await runJson(harness, [
+      "list",
+      "--list",
+      "LightSpace",
+      "--section",
+      "Hosting Station",
+    ])) as { items: TodoItem[] };
+    assert.deepEqual(
+      listed.items.map((item) => item.id),
+      [parsed.id],
+    );
+    const scanned = (await runJson(harness, ["scan", "--list", "Other"])) as TodoScanResult;
+    assert.deepEqual(
+      scanned.items.map((item) => item.id),
+      [overridden.id],
+    );
+
+    const proposal = (await runJson(harness, [
+      "propose",
+      "预填归属",
+      "--reason",
+      "独立交付",
+      "--list",
+      "LightSpace",
+      "--section",
+      "生产与上架",
+    ])) as TodoItem;
+    assert.equal(proposal.listName, "LightSpace");
+    assert.equal(proposal.sectionName, "生产与上架");
+    const accepted = (await runJson(harness, [
+      "triage",
+      proposal.id,
+      "--action",
+      "accept",
+      "--list",
+      "LightPower",
+    ])) as { item: TodoItem };
+    assert.equal(accepted.item.listName, "LightPower");
+    assert.equal(accepted.item.sectionName, "生产与上架");
+
+    const linked = (await runJson(harness, ["add", "可恢复的待办", "--next-step", "保留下一步"])) as TodoItem;
+    await runJson(harness, ["link", linked.id, "--thread", "thr-keep", "--note", "keep me"], {
+      threadId: "thr_actor",
+    });
+    await runJson(harness, ["log", linked.id, "留下的日志", "--no-link"]);
+    await runJson(harness, ["rm", linked.id], { threadId: "thr_actor" });
+    assert.equal((await runJsonError(harness, ["show", linked.id])).error.code, "not_found");
+    const openAfterDelete = (await runJson(harness, ["list", "--status", "all"])) as { items: TodoItem[] };
+    assert.equal(
+      openAfterDelete.items.some((item) => item.id === linked.id),
+      false,
+    );
+    const undoneDelete = (await runJson(harness, ["undo"])) as {
+      undoneRev: number;
+      revision: TodoRevision;
+    };
+    assert.match(undoneDelete.revision.summary, new RegExp(`撤销 #${undoneDelete.undoneRev}`));
+    const restored = (await runJson(harness, ["show", linked.id])) as TodoItem;
+    assert.equal(restored.deletedAt, null);
+    assert.equal(restored.nextStep, "保留下一步");
+    assert.equal(restored.logs.some((log) => log.text === "留下的日志"), true);
+    assert.equal(restored.threads.find((thread) => thread.threadId === "thr-keep")?.note, "keep me");
+
+    await runJson(harness, ["done", linked.id, "--note", "Shipped"]);
+    const completed = (await runJson(harness, ["show", linked.id])) as TodoItem;
+    assert.ok(completed.completedAt);
+    assert.equal(completed.logs.some((log) => log.text === "Shipped"), true);
+    await runJson(harness, ["undo"]);
+    const reopened = (await runJson(harness, ["show", linked.id])) as TodoItem;
+    assert.equal(reopened.completedAt, null);
+    assert.equal(reopened.logs.some((log) => log.text === "Shipped"), false);
+    assert.equal(reopened.logs.some((log) => log.text === "留下的日志"), true);
+
+    const target = (await runJson(harness, ["add", "合并目标", "--next-step", "keep target"])) as TodoItem;
+    await runJson(harness, ["log", target.id, "target log", "--no-link"]);
+    await runJson(harness, ["link", target.id, "--thread", "thr-target", "--note", "target note"]);
+    const source = (await runJson(harness, [
+      "propose",
+      "合并来源",
+      "--reason",
+      "重复了",
+      "--notes",
+      "source notes",
+      "--next-step",
+      "source next",
+    ])) as TodoItem;
+    await runJson(harness, ["log", source.id, "source log", "--no-link"]);
+    await runJson(harness, ["link", source.id, "--thread", "thr-source", "--note", "source note"]);
+    await runJson(harness, ["triage", source.id, "--action", "merge", "--into", target.id]);
+    assert.equal((await runJsonError(harness, ["show", source.id])).error.code, "not_found");
+    await runJson(harness, ["undo"]);
+    const sourceBack = (await runJson(harness, ["show", source.id])) as TodoItem;
+    const targetBack = (await runJson(harness, ["show", target.id])) as TodoItem;
+    assert.equal(sourceBack.bucket, "inbox");
+    assert.equal(sourceBack.notes, "source notes");
+    assert.equal(sourceBack.logs.some((log) => log.text === "source log"), true);
+    assert.equal(sourceBack.threads.find((thread) => thread.threadId === "thr-source")?.note, "source note");
+    assert.equal(targetBack.nextStep, "keep target");
+    assert.equal(targetBack.logs.some((log) => log.text === "target log"), true);
+    assert.equal(targetBack.logs.some((log) => /Merged inbox proposal/.test(log.text)), false);
+    assert.equal(targetBack.logs.some((log) => log.text === "source log"), false);
+    assert.equal(targetBack.threads.find((thread) => thread.threadId === "thr-target")?.note, "target note");
+    assert.equal(targetBack.threads.some((thread) => thread.threadId === "thr-source"), false);
+
+    const limited = (await runJson(harness, ["history", "--limit", "2"])) as {
+      revisions: TodoRevision[];
+    };
+    assert.equal(limited.revisions.length, 2);
+    const history = (await runJson(harness, ["history", "--limit", "100"])) as {
+      revisions: TodoRevision[];
+    };
+    assert.equal(
+      history.revisions.some((revision) => revision.actor === "agent:thr_actor"),
+      true,
+    );
+    const panelCreated = (await harness.behavior.callRpc("quickAdd", { title: "面板新增" })) as TodoItem;
+    const panelHistory = (await harness.behavior.callRpc("listRevisions", {})) as {
+      revisions: TodoRevision[];
+    };
+    assert.equal(panelHistory.revisions[0]?.actor, "ui");
+    assert.equal(panelHistory.revisions[0]?.itemId, panelCreated.id);
+    assert.equal(
+      (await runJsonError(harness, ["undo", String(undoneDelete.undoneRev)])).error.code,
+      "already_undone",
+    );
   } finally {
     await harness.lifecycle.dispose();
   }

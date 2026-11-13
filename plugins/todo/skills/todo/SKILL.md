@@ -39,6 +39,15 @@ Add `--json` for machine-readable output. Buckets are `focus`, `later`,
    In extraction scenarios `bb todo add` is forbidden; it is for the user's
    explicit, direct request to add a todo.
 
+   Put the deliverable in a project list and, when it helps, a section:
+   `bb todo add "<title>" --list LightSpace --section "生产与上架"` or
+   `bb todo propose "<title>" --reason "..." --list LightSpace --section "生产与上架"`.
+   A title prefix does the same thing when those flags are omitted:
+   `#LightSpace/Hosting Station 写 demo 期方案` sets the list, the section, and
+   the clean title. `#LightSpace 双形态上架` sets only the list. The prefix is
+   recognized only at the start, and only when a non-empty title remains after
+   it. Do not invent a new list for a one-off; reuse `bb todo list --json` names.
+
 3. **Scan and advance.** When the user asks to scan the todo list for work,
    run `bb todo scan --json`. Prefer items with `actionable: true` (unfinished,
    not `waiting`, and with no linked thread currently `starting` or `active`),
@@ -62,19 +71,35 @@ thread; do not treat a missing link as an error if `bb todo show <id>` lists it.
 
 ## Commands
 
-- `bb todo list [--status open|inbox|done|all] [--bucket focus|later|waiting|inbox] [--search <query>] [--json]`
+- `bb todo list [--status open|inbox|done|all] [--bucket focus|later|waiting|inbox] [--list <name>] [--section <name>] [--search <query>] [--json]`
 - `bb todo show <id> [--json]`
-- `bb todo add <title> [--bucket focus|later|waiting] [--notes <text>] [--next-step <text>] [--link-current] [--json]`
-- `bb todo propose <title> --reason <text> [--notes <text>] [--next-step <text>] [--link-current] [--json]`
-- `bb todo triage <id> --action accept|merge|dismiss [--bucket focus|later|waiting] [--into <target-id>] [--json]`
+- `bb todo add <title> [--bucket focus|later|waiting] [--list <name>] [--section <name>] [--notes <text>] [--next-step <text>] [--link-current] [--json]`
+- `bb todo propose <title> --reason <text> [--list <name>] [--section <name>] [--notes <text>] [--next-step <text>] [--link-current] [--json]`
+- `bb todo triage <id> --action accept|merge|dismiss [--bucket focus|later|waiting] [--into <target-id>] [--list <name>] [--section <name>] [--json]`
 - `bb todo log <id> <text> [--next-step <text>] [--no-link] [--json]`
 - `bb todo link <id> [--thread <threadId>] [--note <text>] [--json]`
 - `bb todo unlink <id> [--thread <threadId>] [--json]`
 - `bb todo start <id> [--project <projectId>] [--prompt <extra>] [--json]`
 - `bb todo done <id> [--note <text>] [--json]` / `bb todo reopen <id> [--json]`
-- `bb todo update <id> [--title <text>] [--bucket focus|later|waiting] [--notes <text>] [--next-step <text>] [--json]`
+- `bb todo update <id> [--title <text>] [--bucket focus|later|waiting] [--list <name>] [--section <name>] [--notes <text>] [--next-step <text>] [--json]`
+- `bb todo color <list> <blue|orange|green|purple|rose|teal|amber|indigo> [--json]`
 - `bb todo rm <id> [--json]`
-- `bb todo scan [--json]`
+- `bb todo scan [--list <name>] [--section <name>] [--json]`
+- `bb todo history [--limit <n>] [--json]`
+- `bb todo undo [rev] [--json]`
+
+## Lists, sections, and undo
+
+Project lists use eight palette colors. The first eight lists each get a
+different color; later lists reuse a stable hash. `bb todo color` changes one
+list without moving its todos.
+
+`bb todo rm` soft-deletes. Logs and linked threads stay in the database.
+`bb todo history` shows recent creates, edits, completions, triage, and
+deletes. `bb todo undo` restores the newest of those that has not already been
+undone, including a merged-away proposal and the target it was merged into.
+Pass a revision number to undo that one instead. Do not undo just to tidy
+history; undo when a write was wrong.
 
 Only accept, merge, or dismiss an inbox proposal when the user asks; proposals
 exist so a human can veto new workstreams.

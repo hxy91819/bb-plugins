@@ -10,38 +10,49 @@ import {
 import { z } from "zod";
 import {
   TODO_CHANGED_EVENT,
+  TODO_COLORS,
   TODO_DONE_SNAPSHOT_LIMIT,
   TODO_LOG_TEXT_MAX_LENGTH,
   TODO_NEXT_STEP_MAX_LENGTH,
   TODO_NOTES_MAX_LENGTH,
   TODO_PROPOSAL_REASON_MAX_LENGTH,
+  TODO_REVISION_LIMIT_DEFAULT,
+  TODO_START_RELATED_LIMIT,
   TODO_THREAD_NOTE_MAX_LENGTH,
   TODO_TITLE_MAX_LENGTH,
   addTodoLogInput,
+  fallbackTodoColor,
   formatTodoId,
   linkTodoThreadInput,
   parseTodoId,
   prepareStartSessionOutput,
   quickAddInput,
+  resolveTodoPlacement,
   rpcContract,
-  TODO_START_RELATED_LIMIT,
   setTodoCompletedInput,
+  todoColorSchema,
   todoCountsSchema,
+  todoListSummarySchema,
+  todoRevisionSchema,
   todoScanResultSchema,
   todoSnapshotSchema,
   triageInboxInput,
   unlinkTodoThreadInput,
   updateTodoInput,
-  type TriageAction,
   type TodoBucket,
+  type TodoColor,
   type TodoCounts,
   type TodoFormalBucket,
   type TodoItem,
   type TodoListStatus,
+  type TodoListSummary,
   type TodoLogEntry,
+  type TodoRevision,
+  type TodoRevisionAction,
   type TodoScanResult,
   type TodoSnapshot,
   type TodoThreadLink,
+  type TriageAction,
 } from "./contract";
 
 /** A user-facing failure that becomes a coded CLI error and a readable RPC error. */
@@ -64,10 +75,19 @@ type ItemRow = {
   notes: string;
   next_step: string;
   proposal_reason: string | null;
+  list_name: string;
+  section_name: string;
   completed_at: string | null;
+  deleted_at: string | null;
   sort_order: number;
   created_at: string;
   updated_at: string;
+};
+
+type ItemSnapshot = {
+  item: ItemRow;
+  threads: ThreadRow[];
+  logs: LogRow[];
 };
 
 type ThreadRow = {
@@ -138,6 +158,8 @@ type CreateTodoInput = {
   nextStep: string;
   proposalReason?: string | null;
   threadId?: string;
+  listName?: string;
+  sectionName?: string;
 };
 
 type UpdateTodoValues = {
@@ -145,8 +167,20 @@ type UpdateTodoValues = {
   bucket?: TodoFormalBucket;
   notes?: string;
   nextStep?: string;
+  listName?: string;
+  sectionName?: string;
   sortOrder?: number;
 };
+
+function revisionActor(ctx?: { threadId?: string }): string {
+  const threadId = ctx?.threadId?.trim() || process.env.BB_THREAD_ID?.trim() || "";
+  return threadId.length > 0 ? `agent:${threadId}` : "cli";
+}
+
+function clipQuote(title: string): string {
+  const text = title.length > 60 ? `${title.slice(0, 60)}…` : title;
+  return `「${text}」`;
+}
 
 const START_PROMPT_LIMIT = 3_000;
 const START_NOTES_LIMIT = 800;
@@ -302,9 +336,41 @@ export default function plugin(bb: BbPluginApi): void {
       created_at TEXT NOT NULL
     )`,
     `CREATE INDEX todo_logs_item ON todo_logs(item_seq, id DESC)`,
+    `CREATE TABLE IF NOT EXISTS todo_list_meta (
+      list_name TEXT PRIMARY KEY,
+      color TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS todo_revisions (
+      rev INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_seq INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      before_snapshot TEXT,
+      after_snapshot TEXT,
+      undone_at TEXT,
+      created_at TEXT NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS todo_revisions_item ON todo_revisions(item_seq, rev DESC)`,
   ]);
 
+  const columnNames = (table: string): Set<string> =>
+    new Set(
+      (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(
+        (column) => column.name,
+      ),
+    );
+  const ensureColumn = (table: string, column: string, definition: string) => {
+    if (columnNames(table).has(column)) return;
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+  };
+  ensureColumn("todo_items", "list_name", "list_name TEXT NOT NULL DEFAULT ''");
+  ensureColumn("todo_items", "section_name", "section_name TEXT NOT NULL DEFAULT ''");
+  ensureColumn("todo_items", "deleted_at", "deleted_at TEXT");
+
   const now = () => new Date().toISOString();
+  const activeSql = "deleted_at IS NULL";
 
   const publishChanged = (reason: string, seq: number) => {
     bb.realtime.publish(TODO_CHANGED_EVENT, {
@@ -325,7 +391,10 @@ export default function plugin(bb: BbPluginApi): void {
     notes: row.notes,
     nextStep: row.next_step,
     proposalReason: row.proposal_reason,
+    listName: row.list_name,
+    sectionName: row.section_name,
     completedAt: row.completed_at,
+    deletedAt: row.deleted_at,
     sortOrder: row.sort_order,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -445,10 +514,205 @@ export default function plugin(bb: BbPluginApi): void {
 
   const requireItemRow = (seq: number): ItemRow => {
     const row = itemRow(seq);
-    if (!row) {
+    if (!row || row.deleted_at !== null) {
       throw new TodoError(`Todo not found: ${formatTodoId(seq)}`, "not_found", "Run `bb todo list --status all --json` to list ids.");
     }
     return row;
+  };
+
+  const captureBundle = (seq: number): ItemSnapshot | null => {
+    const item = itemRow(seq);
+    if (!item) return null;
+    const threads = db
+      .prepare(
+        "SELECT item_seq, thread_id, note, linked_at FROM todo_threads WHERE item_seq = ? ORDER BY linked_at, thread_id",
+      )
+      .all(seq) as ThreadRow[];
+    const logs = db
+      .prepare(
+        "SELECT id, item_seq, text, thread_id, created_at FROM todo_logs WHERE item_seq = ? ORDER BY id",
+      )
+      .all(seq) as LogRow[];
+    return { item, threads, logs };
+  };
+
+  const encodeSnapshot = (bundles: ItemSnapshot[] | null): string | null =>
+    bundles === null ? null : JSON.stringify(bundles);
+
+  const decodeSnapshot = (raw: string | null): ItemSnapshot[] | null => {
+    if (raw === null) return null;
+    const parsed = JSON.parse(raw) as ItemSnapshot | ItemSnapshot[];
+    return Array.isArray(parsed) ? parsed : [parsed];
+  };
+
+  const writeRevision = (entry: {
+    seq: number;
+    action: TodoRevisionAction;
+    actor: string;
+    summary: string;
+    before: ItemSnapshot[] | null;
+    after: ItemSnapshot[] | null;
+    timestamp: string;
+  }) => {
+    db.prepare(
+      `INSERT INTO todo_revisions
+        (item_seq, action, actor, summary, before_snapshot, after_snapshot, undone_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
+    ).run(
+      entry.seq,
+      entry.action,
+      entry.actor,
+      entry.summary,
+      encodeSnapshot(entry.before),
+      encodeSnapshot(entry.after),
+      entry.timestamp,
+    );
+  };
+
+  const upsertBundle = (bundle: ItemSnapshot) => {
+    const item = bundle.item;
+    db.prepare(
+      `INSERT INTO todo_items (
+        seq, title, bucket, notes, next_step, proposal_reason, completed_at, sort_order,
+        created_at, updated_at, list_name, section_name, deleted_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(seq) DO UPDATE SET
+        title = excluded.title,
+        bucket = excluded.bucket,
+        notes = excluded.notes,
+        next_step = excluded.next_step,
+        proposal_reason = excluded.proposal_reason,
+        completed_at = excluded.completed_at,
+        sort_order = excluded.sort_order,
+        created_at = excluded.created_at,
+        updated_at = excluded.updated_at,
+        list_name = excluded.list_name,
+        section_name = excluded.section_name,
+        deleted_at = excluded.deleted_at`,
+    ).run(
+      item.seq,
+      item.title,
+      item.bucket,
+      item.notes,
+      item.next_step,
+      item.proposal_reason,
+      item.completed_at,
+      item.sort_order,
+      item.created_at,
+      item.updated_at,
+      item.list_name,
+      item.section_name,
+      item.deleted_at,
+    );
+    db.prepare("DELETE FROM todo_threads WHERE item_seq = ?").run(item.seq);
+    for (const thread of bundle.threads) {
+      db.prepare(
+        "INSERT INTO todo_threads (item_seq, thread_id, note, linked_at) VALUES (?, ?, ?, ?)",
+      ).run(thread.item_seq, thread.thread_id, thread.note, thread.linked_at);
+    }
+  };
+
+  const restoreBundles = (bundles: ItemSnapshot[]) => {
+    const seqs = bundles.map((bundle) => bundle.item.seq);
+    const logIds = bundles.flatMap((bundle) => bundle.logs.map((log) => log.id));
+    if (seqs.length === 0) return;
+    const seqPlaceholders = seqs.map(() => "?").join(", ");
+    db.prepare(`DELETE FROM todo_threads WHERE item_seq IN (${seqPlaceholders})`).run(...seqs);
+    if (logIds.length > 0) {
+      const logPlaceholders = logIds.map(() => "?").join(", ");
+      db.prepare(
+        `DELETE FROM todo_logs WHERE item_seq IN (${seqPlaceholders}) OR id IN (${logPlaceholders})`,
+      ).run(...seqs, ...logIds);
+    } else {
+      db.prepare(`DELETE FROM todo_logs WHERE item_seq IN (${seqPlaceholders})`).run(...seqs);
+    }
+    for (const bundle of bundles) {
+      upsertBundle(bundle);
+      for (const log of bundle.logs) {
+        db.prepare(
+          "INSERT INTO todo_logs (id, item_seq, text, thread_id, created_at) VALUES (?, ?, ?, ?, ?)",
+        ).run(log.id, log.item_seq, log.text, log.thread_id, log.created_at);
+      }
+    }
+  };
+
+  const softDelete = (seq: number, timestamp: string) => {
+    db.prepare(
+      "UPDATE todo_items SET deleted_at = ?, updated_at = ? WHERE seq = ? AND deleted_at IS NULL",
+    ).run(timestamp, timestamp, seq);
+  };
+
+  const usedColors = (): Set<string> =>
+    new Set(
+      (db.prepare("SELECT color FROM todo_list_meta").all() as { color: string }[]).map(
+        (row) => row.color,
+      ),
+    );
+
+  const ensureListColor = (listName: string, explicit?: TodoColor) => {
+    if (listName.length === 0) return;
+    const existing = db
+      .prepare("SELECT color FROM todo_list_meta WHERE list_name = ?")
+      .get(listName) as { color: string } | undefined;
+    if (existing && explicit === undefined) return;
+    const color =
+      explicit ??
+      (TODO_COLORS.find((candidate) => !usedColors().has(candidate)) ?? fallbackTodoColor(listName));
+    db.prepare(
+      `INSERT INTO todo_list_meta (list_name, color, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(list_name) DO UPDATE SET color = excluded.color, updated_at = excluded.updated_at`,
+    ).run(listName, color, now());
+  };
+
+  const colorFor = (listName: string): TodoColor => {
+    const existing = db
+      .prepare("SELECT color FROM todo_list_meta WHERE list_name = ?")
+      .get(listName) as { color: string } | undefined;
+    if (existing && todoColorSchema.safeParse(existing.color).success) {
+      return existing.color as TodoColor;
+    }
+    ensureListColor(listName);
+    const created = db
+      .prepare("SELECT color FROM todo_list_meta WHERE list_name = ?")
+      .get(listName) as { color: string } | undefined;
+    return (created?.color as TodoColor | undefined) ?? fallbackTodoColor(listName);
+  };
+
+  const summarizeLists = (rows: ItemRow[]): TodoListSummary[] => {
+    const groups = new Map<
+      string,
+      { firstSeq: number; count: number; sections: Map<string, number> }
+    >();
+    for (const row of rows) {
+      if (row.list_name.length === 0) continue;
+      const group = groups.get(row.list_name) ?? {
+        firstSeq: row.seq,
+        count: 0,
+        sections: new Map<string, number>(),
+      };
+      group.count += 1;
+      group.firstSeq = Math.min(group.firstSeq, row.seq);
+      if (row.section_name.length > 0) {
+        const seen = group.sections.get(row.section_name);
+        group.sections.set(
+          row.section_name,
+          seen === undefined ? row.seq : Math.min(seen, row.seq),
+        );
+      }
+      groups.set(row.list_name, group);
+    }
+    return [...groups.entries()]
+      .sort((left, right) => left[1].firstSeq - right[1].firstSeq || left[0].localeCompare(right[0]))
+      .map(([name, group]) =>
+        todoListSummarySchema.parse({
+          name,
+          color: colorFor(name),
+          openCount: group.count,
+          sections: [...group.sections.entries()]
+            .sort((left, right) => left[1] - right[1] || left[0].localeCompare(right[0]))
+            .map(([section]) => section),
+        }),
+      );
   };
 
   const mustParseId = (id: string): number => {
@@ -469,7 +733,7 @@ export default function plugin(bb: BbPluginApi): void {
   const countOpenByBucket = (): TodoCounts => {
     const grouped = db
       .prepare(
-        "SELECT bucket, count(*) AS total FROM todo_items WHERE completed_at IS NULL GROUP BY bucket",
+        `SELECT bucket, count(*) AS total FROM todo_items WHERE completed_at IS NULL AND ${activeSql} GROUP BY bucket`,
       )
       .all() as { bucket: TodoBucket; total: number }[];
     const byBucket = new Map(grouped.map((row) => [row.bucket, Number(row.total)]));
@@ -477,7 +741,7 @@ export default function plugin(bb: BbPluginApi): void {
     const later = byBucket.get("later") ?? 0;
     const waiting = byBucket.get("waiting") ?? 0;
     const doneRow = db
-      .prepare("SELECT count(*) AS total FROM todo_items WHERE completed_at IS NOT NULL")
+      .prepare(`SELECT count(*) AS total FROM todo_items WHERE completed_at IS NOT NULL AND ${activeSql}`)
       .get() as { total: number };
     return todoCountsSchema.parse({
       inbox: byBucket.get("inbox") ?? 0,
@@ -525,36 +789,54 @@ export default function plugin(bb: BbPluginApi): void {
     );
   };
 
-  const deleteItemRow = (seq: number): boolean => {
-    db.prepare("DELETE FROM todo_logs WHERE item_seq = ?").run(seq);
-    db.prepare("DELETE FROM todo_threads WHERE item_seq = ?").run(seq);
-    return db.prepare("DELETE FROM todo_items WHERE seq = ?").run(seq).changes > 0;
-  };
-
-  const createTodo = async (input: CreateTodoInput): Promise<TodoItem> => {
+  const createTodo = async (input: CreateTodoInput, actor: string): Promise<TodoItem> => {
+    const placement = resolveTodoPlacement(input.title, {
+      listName: input.listName,
+      sectionName: input.sectionName,
+    });
+    if (placement.title.length === 0) {
+      throw new TodoError("Todo title is empty", "invalid_input", "Write a title after the #list prefix.");
+    }
     const timestamp = now();
-    const result = db
-      .prepare(
-        `INSERT INTO todo_items
-          (title, bucket, notes, next_step, proposal_reason, completed_at, sort_order, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?)`,
-      )
-      .run(
-        input.title,
-        input.bucket,
-        input.notes,
-        input.nextStep,
-        input.proposalReason ?? null,
+    const seq = db.transaction(() => {
+      const result = db
+        .prepare(
+          `INSERT INTO todo_items
+            (title, bucket, notes, next_step, proposal_reason, completed_at, sort_order, created_at, updated_at, list_name, section_name)
+           VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?)`,
+        )
+        .run(
+          placement.title,
+          input.bucket,
+          input.notes,
+          input.nextStep,
+          input.proposalReason ?? null,
+          timestamp,
+          timestamp,
+          placement.listName,
+          placement.sectionName,
+        );
+      const createdSeq = Number(result.lastInsertRowid);
+      if (input.threadId) linkThreadRow(createdSeq, input.threadId, undefined, timestamp);
+      if (placement.listName.length > 0) ensureListColor(placement.listName);
+      const placed = placement.listName.length > 0 ? ` 到 ${placement.listName}` : "";
+      const section = placement.sectionName.length > 0 ? ` / ${placement.sectionName}` : "";
+      writeRevision({
+        seq: createdSeq,
+        action: "create",
+        actor,
+        summary: `新增 ${formatTodoId(createdSeq)}${clipQuote(placement.title)}${placed}${section}`,
+        before: null,
+        after: [captureBundle(createdSeq)!],
         timestamp,
-        timestamp,
-      );
-    const seq = Number(result.lastInsertRowid);
-    if (input.threadId) linkThreadRow(seq, input.threadId, undefined, timestamp);
+      });
+      return createdSeq;
+    })();
     publishChanged("created", seq);
     return (await readEnrichedItem(seq))!;
   };
 
-  const updateTodo = async (id: string, values: UpdateTodoValues): Promise<TodoItem> => {
+  const updateTodo = async (id: string, values: UpdateTodoValues, actor: string): Promise<TodoItem> => {
     const seq = mustParseId(id);
     const row = requireItemRow(seq);
     if (row.bucket === "inbox") {
@@ -582,17 +864,40 @@ export default function plugin(bb: BbPluginApi): void {
       fields.push("next_step = ?");
       valuesToBind.push(values.nextStep);
     }
+    if (values.listName !== undefined) {
+      fields.push("list_name = ?");
+      valuesToBind.push(values.listName);
+    }
+    if (values.sectionName !== undefined) {
+      fields.push("section_name = ?");
+      valuesToBind.push(values.sectionName);
+    }
     if (values.sortOrder !== undefined) {
       fields.push("sort_order = ?");
       valuesToBind.push(values.sortOrder);
     }
     if (fields.length === 0) return (await readEnrichedItem(seq))!;
-    fields.push("updated_at = ?");
-    valuesToBind.push(now());
-    db.prepare(`UPDATE todo_items SET ${fields.join(", ")} WHERE seq = ?`).run(
-      ...valuesToBind,
-      seq,
-    );
+    const timestamp = now();
+    db.transaction(() => {
+      const before = captureBundle(seq);
+      fields.push("updated_at = ?");
+      valuesToBind.push(timestamp);
+      db.prepare(`UPDATE todo_items SET ${fields.join(", ")} WHERE seq = ?`).run(
+        ...valuesToBind,
+        seq,
+      );
+      const nextList = values.listName ?? row.list_name;
+      if (nextList.length > 0) ensureListColor(nextList);
+      writeRevision({
+        seq,
+        action: "update",
+        actor,
+        summary: `修改 ${formatTodoId(seq)}${clipQuote(values.title ?? row.title)}`,
+        before: before ? [before] : null,
+        after: [captureBundle(seq)!],
+        timestamp,
+      });
+    })();
     publishChanged("updated", seq);
     return (await readEnrichedItem(seq))!;
   };
@@ -601,6 +906,7 @@ export default function plugin(bb: BbPluginApi): void {
     id: string,
     completed: boolean,
     note: string | undefined,
+    actor: string,
   ): Promise<TodoItem> => {
     const seq = mustParseId(id);
     const row = requireItemRow(seq);
@@ -615,20 +921,42 @@ export default function plugin(bb: BbPluginApi): void {
     if (completed) {
       if (row.completed_at === null) {
         db.transaction(() => {
+          const before = captureBundle(seq);
           db.prepare("UPDATE todo_items SET completed_at = ?, updated_at = ? WHERE seq = ?").run(
             timestamp,
             timestamp,
             seq,
           );
           if (note) insertLog(seq, note, null, timestamp);
+          writeRevision({
+            seq,
+            action: "complete",
+            actor,
+            summary: `勾选完成 ${formatTodoId(seq)}`,
+            before: before ? [before] : null,
+            after: [captureBundle(seq)!],
+            timestamp,
+          });
         })();
         publishChanged("completed", seq);
       }
     } else if (row.completed_at !== null) {
-      db.prepare("UPDATE todo_items SET completed_at = NULL, updated_at = ? WHERE seq = ?").run(
-        timestamp,
-        seq,
-      );
+      db.transaction(() => {
+        const before = captureBundle(seq);
+        db.prepare("UPDATE todo_items SET completed_at = NULL, updated_at = ? WHERE seq = ?").run(
+          timestamp,
+          seq,
+        );
+        writeRevision({
+          seq,
+          action: "reopen",
+          actor,
+          summary: `重新打开 ${formatTodoId(seq)}`,
+          before: before ? [before] : null,
+          after: [captureBundle(seq)!],
+          timestamp,
+        });
+      })();
       publishChanged("reopened", seq);
     }
     return (await readEnrichedItem(seq))!;
@@ -636,6 +964,7 @@ export default function plugin(bb: BbPluginApi): void {
 
   const triageInbox = async (
     input: z.infer<typeof triageInboxInput>,
+    actor: string,
   ): Promise<{ action: TriageAction; item: TodoItem | null }> => {
     const seq = mustParseId(input.id);
     const source = requireItemRow(seq);
@@ -648,19 +977,46 @@ export default function plugin(bb: BbPluginApi): void {
     }
     const timestamp = now();
     if (input.action === "dismiss") {
-      const removed = db.transaction(() => deleteItemRow(seq))();
-      if (removed) publishChanged("dismissed", seq);
+      db.transaction(() => {
+        const before = captureBundle(seq);
+        softDelete(seq, timestamp);
+        writeRevision({
+          seq,
+          action: "triage_dismiss",
+          actor,
+          summary: `忽略 ${formatTodoId(seq)}${clipQuote(source.title)}`,
+          before: before ? [before] : null,
+          after: [captureBundle(seq)!],
+          timestamp,
+        });
+      })();
+      publishChanged("dismissed", seq);
       return { action: "dismiss", item: null };
     }
     if (input.action === "accept") {
       const bucket = input.bucket ?? "focus";
+      const listName = input.listName !== undefined ? input.listName : source.list_name;
+      const sectionName = input.sectionName !== undefined ? input.sectionName : source.section_name;
       db.transaction(() => {
+        const before = captureBundle(seq);
         if (source.proposal_reason) {
           insertLog(seq, `Accepted from inbox: ${source.proposal_reason}`, null, timestamp);
         }
         db.prepare(
-          "UPDATE todo_items SET bucket = ?, proposal_reason = NULL, updated_at = ? WHERE seq = ?",
-        ).run(bucket, timestamp, seq);
+          `UPDATE todo_items
+           SET bucket = ?, proposal_reason = NULL, list_name = ?, section_name = ?, updated_at = ?
+           WHERE seq = ?`,
+        ).run(bucket, listName, sectionName, timestamp, seq);
+        if (listName.length > 0) ensureListColor(listName);
+        writeRevision({
+          seq,
+          action: "triage_accept",
+          actor,
+          summary: `采纳 ${formatTodoId(seq)} 到 ${bucket}`,
+          before: before ? [before] : null,
+          after: [captureBundle(seq)!],
+          timestamp,
+        });
       })();
       publishChanged("triaged", seq);
       return { action: "accept", item: (await readEnrichedItem(seq))! };
@@ -700,6 +1056,8 @@ export default function plugin(bb: BbPluginApi): void {
         ? source.next_step
         : target.next_step;
     db.transaction(() => {
+      const beforeSource = captureBundle(seq);
+      const beforeTarget = captureBundle(targetSeq);
       db.prepare("UPDATE todo_logs SET item_seq = ? WHERE item_seq = ?").run(targetSeq, seq);
       insertLog(targetSeq, mergedLog.join("\n"), null, timestamp);
       const linked = db
@@ -713,7 +1071,19 @@ export default function plugin(bb: BbPluginApi): void {
         timestamp,
         targetSeq,
       );
-      deleteItemRow(seq);
+      softDelete(seq, timestamp);
+      const after = [captureBundle(seq), captureBundle(targetSeq)].filter(
+        (bundle): bundle is ItemSnapshot => bundle !== null,
+      );
+      writeRevision({
+        seq: targetSeq,
+        action: "triage_merge",
+        actor,
+        summary: `合并 ${formatTodoId(seq)} 至 ${formatTodoId(targetSeq)}`,
+        before: [beforeSource, beforeTarget].filter((bundle): bundle is ItemSnapshot => bundle !== null),
+        after,
+        timestamp,
+      });
     })();
     publishChanged("merged", targetSeq);
     return { action: "merge", item: (await readEnrichedItem(targetSeq))! };
@@ -771,23 +1141,43 @@ export default function plugin(bb: BbPluginApi): void {
     return (await readEnrichedItem(seq))!;
   };
 
-  const removeTodo = (seq: number): { removed: boolean } => {
-    const removed = db.transaction(() => deleteItemRow(seq))();
-    if (removed) publishChanged("removed", seq);
-    return { removed };
+  const removeTodo = (seq: number, actor: string): { removed: boolean } => {
+    const row = itemRow(seq);
+    if (!row || row.deleted_at !== null) return { removed: false };
+    const timestamp = now();
+    db.transaction(() => {
+      const before = captureBundle(seq);
+      softDelete(seq, timestamp);
+      writeRevision({
+        seq,
+        action: "delete",
+        actor,
+        summary: `删除 ${formatTodoId(seq)}${clipQuote(row.title)}`,
+        before: before ? [before] : null,
+        after: [captureBundle(seq)!],
+        timestamp,
+      });
+    })();
+    publishChanged("removed", seq);
+    return { removed: true };
   };
 
   const showTodo = async (id: string): Promise<TodoItem | null> => {
     const seq = parseTodoId(id);
-    return seq === null ? null : readEnrichedItem(seq);
+    if (seq === null) return null;
+    const row = itemRow(seq);
+    if (!row || row.deleted_at !== null) return null;
+    return readEnrichedItem(seq);
   };
 
   const listItems = async (
     status: TodoListStatus,
     bucket: TodoBucket | undefined,
     search: string,
+    listName?: string,
+    sectionName?: string,
   ): Promise<TodoItem[]> => {
-    const clauses: string[] = [];
+    const clauses: string[] = [activeSql];
     const params: string[] = [];
     if (status === "open") {
       clauses.push("completed_at IS NULL", "bucket <> 'inbox'");
@@ -795,6 +1185,14 @@ export default function plugin(bb: BbPluginApi): void {
       clauses.push("completed_at IS NULL", "bucket = 'inbox'");
     } else if (status === "done") {
       clauses.push("completed_at IS NOT NULL");
+    }
+    if (listName !== undefined && listName.length > 0) {
+      clauses.push("list_name = ?");
+      params.push(listName);
+    }
+    if (sectionName !== undefined && sectionName.length > 0) {
+      clauses.push("section_name = ?");
+      params.push(sectionName);
     }
     if (bucket !== undefined) {
       clauses.push("bucket = ?");
@@ -826,19 +1224,19 @@ export default function plugin(bb: BbPluginApi): void {
     const openRows = db
       .prepare(
         `SELECT * FROM todo_items
-         WHERE completed_at IS NULL AND bucket <> 'inbox'
+         WHERE completed_at IS NULL AND bucket <> 'inbox' AND ${activeSql}
          ORDER BY CASE bucket WHEN 'focus' THEN 0 WHEN 'later' THEN 1 WHEN 'waiting' THEN 2 ELSE 3 END,
                   sort_order ASC, seq ASC`,
       )
       .all() as ItemRow[];
     const inboxRows = db
       .prepare(
-        "SELECT * FROM todo_items WHERE completed_at IS NULL AND bucket = 'inbox' ORDER BY seq DESC",
+        `SELECT * FROM todo_items WHERE completed_at IS NULL AND bucket = 'inbox' AND ${activeSql} ORDER BY seq DESC`,
       )
       .all() as ItemRow[];
     const doneRows = db
       .prepare(
-        "SELECT * FROM todo_items WHERE completed_at IS NOT NULL ORDER BY completed_at DESC, seq DESC LIMIT ?",
+        `SELECT * FROM todo_items WHERE completed_at IS NOT NULL AND ${activeSql} ORDER BY completed_at DESC, seq DESC LIMIT ?`,
       )
       .all(TODO_DONE_SNAPSHOT_LIMIT) as ItemRow[];
     const items = await readRows([...openRows, ...inboxRows, ...doneRows]);
@@ -853,21 +1251,34 @@ export default function plugin(bb: BbPluginApi): void {
       },
       done: pick(doneRows),
       counts: countOpenByBucket(),
+      lists: summarizeLists(openRows),
     });
   };
 
-  const scanTodos = async (): Promise<TodoScanResult> => {
+  const scanTodos = async (listName?: string, sectionName?: string): Promise<TodoScanResult> => {
     const inboxRow = db
-      .prepare("SELECT count(*) AS total FROM todo_items WHERE completed_at IS NULL AND bucket = 'inbox'")
+      .prepare(
+        `SELECT count(*) AS total FROM todo_items WHERE completed_at IS NULL AND bucket = 'inbox' AND ${activeSql}`,
+      )
       .get() as { total: number };
+    const clauses = ["completed_at IS NULL", "bucket <> 'inbox'", activeSql];
+    const params: string[] = [];
+    if (listName !== undefined && listName.length > 0) {
+      clauses.push("list_name = ?");
+      params.push(listName);
+    }
+    if (sectionName !== undefined && sectionName.length > 0) {
+      clauses.push("section_name = ?");
+      params.push(sectionName);
+    }
     const rows = db
       .prepare(
         `SELECT * FROM todo_items
-         WHERE completed_at IS NULL AND bucket <> 'inbox'
+         WHERE ${clauses.join(" AND ")}
          ORDER BY CASE bucket WHEN 'focus' THEN 0 WHEN 'later' THEN 1 WHEN 'waiting' THEN 2 ELSE 3 END,
                   sort_order ASC, seq ASC`,
       )
-      .all() as ItemRow[];
+      .all(...params) as ItemRow[];
     const items = await readRows(rows);
     return todoScanResultSchema.parse({
       inboxCount: Number(inboxRow.total),
@@ -880,6 +1291,8 @@ export default function plugin(bb: BbPluginApi): void {
           seq: item.seq,
           title: item.title,
           bucket: item.bucket as TodoFormalBucket,
+          listName: item.listName,
+          sectionName: item.sectionName,
           nextStep: item.nextStep,
           latestLog: item.logs[0] ?? null,
           threads: item.threads,
@@ -968,30 +1381,184 @@ export default function plugin(bb: BbPluginApi): void {
     };
   };
 
+  const listRevisions = (limit = TODO_REVISION_LIMIT_DEFAULT): TodoRevision[] => {
+    const rows = db
+      .prepare(
+        `SELECT rev, item_seq, action, actor, summary, undone_at, created_at
+         FROM todo_revisions ORDER BY rev DESC LIMIT ?`,
+      )
+      .all(limit) as {
+      rev: number;
+      item_seq: number;
+      action: TodoRevisionAction;
+      actor: string;
+      summary: string;
+      undone_at: string | null;
+      created_at: string;
+    }[];
+    return rows.map((row) =>
+      todoRevisionSchema.parse({
+        rev: row.rev,
+        itemSeq: row.item_seq,
+        itemId: formatTodoId(row.item_seq),
+        action: row.action,
+        actor: row.actor,
+        summary: row.summary,
+        undoneAt: row.undone_at,
+        createdAt: row.created_at,
+      }),
+    );
+  };
+
+  const undoRevision = (rev: number | undefined, actor: string) => {
+    const row = (
+      rev === undefined
+        ? db
+            .prepare(
+              `SELECT rev, item_seq, action, actor, summary, before_snapshot, after_snapshot, undone_at
+               FROM todo_revisions
+               WHERE undone_at IS NULL AND action <> 'undo'
+               ORDER BY rev DESC LIMIT 1`,
+            )
+            .get()
+        : db
+            .prepare(
+              `SELECT rev, item_seq, action, actor, summary, before_snapshot, after_snapshot, undone_at
+               FROM todo_revisions WHERE rev = ?`,
+            )
+            .get(rev)
+    ) as
+      | {
+          rev: number;
+          item_seq: number;
+          action: string;
+          summary: string;
+          before_snapshot: string | null;
+          after_snapshot: string | null;
+          undone_at: string | null;
+        }
+      | undefined;
+    if (!row) {
+      throw new TodoError(
+        rev === undefined ? "Nothing to undo" : `Revision not found: ${rev}`,
+        rev === undefined ? "nothing_to_undo" : "not_found",
+        rev === undefined
+          ? "Run `bb todo history` to see recorded changes."
+          : "Pass a revision from `bb todo history`.",
+      );
+    }
+    if (row.action === "undo") {
+      throw new TodoError(
+        `Revision ${row.rev} is itself an undo`,
+        "not_undoable",
+        "Undo a create, update, complete, triage, or delete revision.",
+      );
+    }
+    if (row.undone_at !== null) {
+      throw new TodoError(
+        `Revision ${row.rev} was already undone`,
+        "already_undone",
+        "Run `bb todo history` and pick a revision that is still active.",
+      );
+    }
+    const before = decodeSnapshot(row.before_snapshot);
+    const after = decodeSnapshot(row.after_snapshot);
+    const timestamp = now();
+    const undone = db.transaction(() => {
+      if (before && before.length > 0) restoreBundles(before);
+      else {
+        for (const bundle of after ?? []) softDelete(bundle.item.seq, timestamp);
+      }
+      db.prepare("UPDATE todo_revisions SET undone_at = ? WHERE rev = ?").run(timestamp, row.rev);
+      const touched = (before && before.length > 0 ? before : (after ?? [])).map((bundle) => bundle.item.seq);
+      const restored = touched
+        .map((seq) => captureBundle(seq))
+        .filter((bundle): bundle is ItemSnapshot => bundle !== null);
+      writeRevision({
+        seq: row.item_seq,
+        action: "undo",
+        actor,
+        summary: `撤销 #${row.rev}：${row.summary}`,
+        before: after,
+        after: restored,
+        timestamp,
+      });
+      const created = db
+        .prepare("SELECT rev, item_seq, action, actor, summary, undone_at, created_at FROM todo_revisions WHERE rev = last_insert_rowid()")
+        .get() as {
+        rev: number;
+        item_seq: number;
+        action: TodoRevisionAction;
+        actor: string;
+        summary: string;
+        undone_at: string | null;
+        created_at: string;
+      };
+      return todoRevisionSchema.parse({
+        rev: created.rev,
+        itemSeq: created.item_seq,
+        itemId: formatTodoId(created.item_seq),
+        action: created.action,
+        actor: created.actor,
+        summary: created.summary,
+        undoneAt: created.undone_at,
+        createdAt: created.created_at,
+      });
+    })();
+    publishChanged("undo", row.item_seq);
+    return { undoneRev: row.rev, revision: undone };
+  };
+
+  const setListColor = (listName: string, color: TodoColor): TodoListSummary => {
+    ensureListColor(listName, color);
+    const openRows = db
+      .prepare(
+        `SELECT * FROM todo_items WHERE completed_at IS NULL AND bucket <> 'inbox' AND ${activeSql} AND list_name = ?`,
+      )
+      .all(listName) as ItemRow[];
+    const summary = summarizeLists(openRows).find((list) => list.name === listName);
+    publishChanged("recolored", openRows[0]?.seq ?? 1);
+    return summary ?? todoListSummarySchema.parse({ name: listName, color, openCount: 0, sections: [] });
+  };
+
   bb.rpc.register(rpcContract, {
     listSnapshot: () => listSnapshot(),
     quickAdd: (input) =>
-      createTodo({
-        title: input.title,
-        bucket: input.bucket,
-        notes: "",
-        nextStep: "",
-      }),
+      createTodo(
+        {
+          title: input.title,
+          bucket: input.bucket,
+          notes: "",
+          nextStep: "",
+          listName: input.listName,
+          sectionName: input.sectionName,
+        },
+        "ui",
+      ),
     update: (input) =>
-      updateTodo(input.id, {
-        title: input.title,
-        bucket: input.bucket,
-        notes: input.notes,
-        nextStep: input.nextStep,
-        sortOrder: input.sortOrder,
-      }),
-    setCompleted: (input) => setCompleted(input.id, input.completed, input.note),
-    triageInbox: (input) => triageInbox(input),
+      updateTodo(
+        input.id,
+        {
+          title: input.title,
+          bucket: input.bucket,
+          notes: input.notes,
+          nextStep: input.nextStep,
+          listName: input.listName,
+          sectionName: input.sectionName,
+          sortOrder: input.sortOrder,
+        },
+        "ui",
+      ),
+    setCompleted: (input) => setCompleted(input.id, input.completed, input.note, "ui"),
+    triageInbox: (input) => triageInbox(input, "ui"),
     addLog: (input) => addLog(input),
     linkThread: (input) => linkThread(input),
     unlinkThread: (input) => unlinkThread(input),
-    remove: (input) => removeTodo(mustParseId(input.id)),
+    remove: (input) => removeTodo(mustParseId(input.id), "ui"),
     prepareStartSession: (input) => prepareStartSession(input.id),
+    setListColor: (input) => setListColor(input.listName, input.color),
+    listRevisions: (input) => ({ revisions: listRevisions(input.limit) }),
+    undoRevision: (input) => undoRevision(input.rev, "ui"),
   });
 
   const reply = (
@@ -1058,6 +1625,8 @@ export default function plugin(bb: BbPluginApi): void {
 
   const humanItemDetail = (item: TodoItem): string => {
     const lines = [`${item.id}  ${item.completedAt !== null ? "done" : item.bucket}  ${item.title}`];
+    if (item.listName) lines.push(`list: ${item.listName}`);
+    if (item.sectionName) lines.push(`section: ${item.sectionName}`);
     if (item.proposalReason) lines.push(`proposal: ${item.proposalReason}`);
     if (item.notes) lines.push(`notes: ${item.notes}`);
     if (item.nextStep) lines.push(`next: ${item.nextStep}`);
@@ -1095,7 +1664,10 @@ export default function plugin(bb: BbPluginApi): void {
         : item.bucket === "waiting"
           ? "waiting"
           : "running";
-      lines.push(`${item.id}  ${item.bucket}  ${item.title}  [${flag}]`);
+      const place = item.listName
+        ? `  ${item.listName}${item.sectionName ? `/${item.sectionName}` : ""}`
+        : "";
+      lines.push(`${item.id}  ${item.bucket}${place}  ${item.title}  [${flag}]`);
       if (item.nextStep) lines.push(`  next: ${item.nextStep}`);
       if (item.latestLog) lines.push(`  last log: ${item.latestLog.text}`);
       if (item.threads.length > 0) {
@@ -1137,6 +1709,14 @@ export default function plugin(bb: BbPluginApi): void {
               type: "boolean",
               description: "Link the invoking bb thread to the new todo.",
             },
+            list: {
+              type: "string",
+              description: "Project list name. Overrides a #List prefix in the title.",
+            },
+            section: {
+              type: "string",
+              description: "Section inside the list. Overrides a #List/Section prefix.",
+            },
             json: jsonOption,
           },
           async run({ positionals, options }, ctx) {
@@ -1146,15 +1726,22 @@ export default function plugin(bb: BbPluginApi): void {
               notes: options.notes,
               nextStep: options["next-step"],
               threadId: options["link-current"] ? requireCurrentThread(ctx) : undefined,
+              listName: options.list,
+              sectionName: options.section,
             });
             const item = await cliCall(() =>
-              createTodo({
-                title: input.title,
-                bucket: input.bucket,
-                notes: input.notes,
-                nextStep: input.nextStep,
-                threadId: input.threadId,
-              }),
+              createTodo(
+                {
+                  title: input.title,
+                  bucket: input.bucket,
+                  notes: input.notes,
+                  nextStep: input.nextStep,
+                  threadId: input.threadId,
+                  listName: input.listName,
+                  sectionName: input.sectionName,
+                },
+                revisionActor(ctx),
+              ),
             );
             return reply(item, options.json, () => `Added ${item.id} (${item.bucket}): ${item.title}`);
           },
@@ -1185,6 +1772,14 @@ export default function plugin(bb: BbPluginApi): void {
               type: "boolean",
               description: "Link the invoking bb thread to the proposal.",
             },
+            list: {
+              type: "string",
+              description: "Suggested project list. Overrides a #List prefix in the title.",
+            },
+            section: {
+              type: "string",
+              description: "Suggested section. Overrides a #List/Section prefix.",
+            },
             json: jsonOption,
           },
           async run({ positionals, options }, ctx) {
@@ -1195,15 +1790,27 @@ export default function plugin(bb: BbPluginApi): void {
               nextStep: options["next-step"],
               threadId: options["link-current"] ? requireCurrentThread(ctx) : undefined,
             });
-            const item = await cliCall(() =>
-              createTodo({
-                title: input.title,
-                bucket: "inbox",
-                notes: input.notes,
-                nextStep: input.nextStep,
-                proposalReason: input.reason,
-                threadId: input.threadId,
+            const placed = parseCli(
+              z.object({
+                listName: z.string().trim().max(80).optional(),
+                sectionName: z.string().trim().max(80).optional(),
               }),
+              { listName: options.list, sectionName: options.section },
+            );
+            const item = await cliCall(() =>
+              createTodo(
+                {
+                  title: input.title,
+                  bucket: "inbox",
+                  notes: input.notes,
+                  nextStep: input.nextStep,
+                  proposalReason: input.reason,
+                  threadId: input.threadId,
+                  listName: placed.listName,
+                  sectionName: placed.sectionName,
+                },
+                revisionActor(ctx),
+              ),
             );
             return reply(item, options.json, () =>
               `Proposed ${item.id} (inbox): ${item.title}\nReason: ${item.proposalReason}`,
@@ -1232,9 +1839,17 @@ export default function plugin(bb: BbPluginApi): void {
               type: "string",
               description: "Target todo id. Required with --action merge.",
             },
+            list: {
+              type: "string",
+              description: "Project list to apply when accepting.",
+            },
+            section: {
+              type: "string",
+              description: "Section to apply when accepting.",
+            },
             json: jsonOption,
           },
-          async run({ positionals, options }) {
+          async run({ positionals, options }, ctx) {
             if (options.action === "merge" && options.into === undefined) {
               throw new PluginCliError("Merging an inbox proposal requires --into <target-id>", {
                 code: "missing_into",
@@ -1253,13 +1868,21 @@ export default function plugin(bb: BbPluginApi): void {
                 hint: "Remove --bucket, or change --action to accept.",
               });
             }
+            if (options.action !== "accept" && (options.list !== undefined || options.section !== undefined)) {
+              throw new PluginCliError("--list and --section are only valid with --action accept", {
+                code: "invalid_combination",
+                hint: "Remove --list and --section, or change --action to accept.",
+              });
+            }
             const input = parseCli(triageInboxInput, {
               id: cliTodoId(positionals.id),
               action: options.action,
               bucket: options.bucket,
               intoId: options.into === undefined ? undefined : cliTodoId(options.into),
+              listName: options.list,
+              sectionName: options.section,
             });
-            const result = await cliCall(() => triageInbox(input));
+            const result = await cliCall(() => triageInbox(input, revisionActor(ctx)));
             const human =
               result.action === "dismiss"
                 ? `Dismissed ${positionals.id}`
@@ -1290,11 +1913,19 @@ export default function plugin(bb: BbPluginApi): void {
               type: "string",
               description: "Case-insensitive text search over title, notes, and next step.",
             },
+            list: {
+              type: "string",
+              description: "Only todos in this project list.",
+            },
+            section: {
+              type: "string",
+              description: "Only todos in this section.",
+            },
             json: jsonOption,
           },
           async run({ options }) {
             const items = await cliCall(() =>
-              listItems(options.status, options.bucket, options.search ?? ""),
+              listItems(options.status, options.bucket, options.search ?? "", options.list, options.section),
             );
             return reply({ items, count: items.length }, options.json, () =>
               items.length === 0 ? "No todos." : items.map(humanItemSummary).join("\n"),
@@ -1338,18 +1969,28 @@ export default function plugin(bb: BbPluginApi): void {
               type: "string",
               description: `Replace next step (at most ${TODO_NEXT_STEP_MAX_LENGTH} characters).`,
             },
+            list: {
+              type: "string",
+              description: "Move the todo to this project list. Pass an empty string to clear it.",
+            },
+            section: {
+              type: "string",
+              description: "Move the todo to this section. Pass an empty string to clear it.",
+            },
             json: jsonOption,
           },
-          async run({ positionals, options }) {
+          async run({ positionals, options }, ctx) {
             if (
               options.title === undefined &&
               options.bucket === undefined &&
               options.notes === undefined &&
-              options["next-step"] === undefined
+              options["next-step"] === undefined &&
+              options.list === undefined &&
+              options.section === undefined
             ) {
               throw new PluginCliError("No changes supplied", {
                 code: "missing_change",
-                hint: "Pass at least one of --title, --bucket, --notes, or --next-step.",
+                hint: "Pass at least one of --title, --bucket, --notes, --next-step, --list, or --section.",
               });
             }
             const input = parseCli(updateTodoInput, {
@@ -1358,15 +1999,23 @@ export default function plugin(bb: BbPluginApi): void {
               bucket: options.bucket,
               notes: options.notes,
               nextStep: options["next-step"],
+              listName: options.list,
+              sectionName: options.section,
             });
             const item = await cliCall(() =>
-              updateTodo(input.id, {
-                title: input.title,
-                bucket: input.bucket,
-                notes: input.notes,
-                nextStep: input.nextStep,
-                sortOrder: input.sortOrder,
-              }),
+              updateTodo(
+                input.id,
+                {
+                  title: input.title,
+                  bucket: input.bucket,
+                  notes: input.notes,
+                  nextStep: input.nextStep,
+                  listName: input.listName,
+                  sectionName: input.sectionName,
+                  sortOrder: input.sortOrder,
+                },
+                revisionActor(ctx),
+              ),
             );
             return reply(item, options.json, () => humanItemDetail(item));
           },
@@ -1384,14 +2033,14 @@ export default function plugin(bb: BbPluginApi): void {
             },
             json: jsonOption,
           },
-          async run({ positionals, options }) {
+          async run({ positionals, options }, ctx) {
             const input = parseCli(setTodoCompletedInput, {
               id: cliTodoId(positionals.id),
               completed: true,
               note: options.note,
             });
             const item = await cliCall(() =>
-              setCompleted(input.id, input.completed, input.note),
+              setCompleted(input.id, input.completed, input.note, revisionActor(ctx)),
             );
             return reply(item, options.json, () => `Completed ${item.id}: ${item.title}`);
           },
@@ -1403,13 +2052,13 @@ export default function plugin(bb: BbPluginApi): void {
             { name: "id", description: "Completed todo id (T-1, t-1, or 1)", required: true },
           ],
           options: { json: jsonOption },
-          async run({ positionals, options }) {
+          async run({ positionals, options }, ctx) {
             const input = parseCli(setTodoCompletedInput, {
               id: cliTodoId(positionals.id),
               completed: false,
             });
             const item = await cliCall(() =>
-              setCompleted(input.id, input.completed, undefined),
+              setCompleted(input.id, input.completed, undefined, revisionActor(ctx)),
             );
             return reply(item, options.json, () => `Reopened ${item.id}: ${item.title}`);
           },
@@ -1421,9 +2070,9 @@ export default function plugin(bb: BbPluginApi): void {
             { name: "id", description: "Todo id (T-1, t-1, or 1)", required: true },
           ],
           options: { json: jsonOption },
-          async run({ positionals, options }) {
+          async run({ positionals, options }, ctx) {
             const id = cliTodoId(positionals.id);
-            const result = await cliCall(() => removeTodo(parseTodoId(id)!));
+            const result = await cliCall(() => removeTodo(parseTodoId(id)!, revisionActor(ctx)));
             if (!result.removed) throw notFound(positionals.id);
             return reply({ id, removed: true }, options.json, () => `Removed ${id}`);
           },
@@ -1552,10 +2201,95 @@ export default function plugin(bb: BbPluginApi): void {
           summary: "Scan open formal todos for agent-driven progress",
           description:
             "Returns inboxCount plus every open formal todo with its next step, latest log, linked threads, hasRunningThread, and actionable flags. actionable = not waiting and no linked thread is active or starting.",
-          options: { json: jsonOption },
+          options: {
+            list: {
+              type: "string",
+              description: "Only todos in this project list.",
+            },
+            section: {
+              type: "string",
+              description: "Only todos in this section.",
+            },
+            json: jsonOption,
+          },
           async run({ options }) {
-            const result = await cliCall(() => scanTodos());
+            const result = await cliCall(() => scanTodos(options.list, options.section));
             return reply(result, options.json, () => humanScan(result));
+          },
+        }),
+
+        color: cliCommand({
+          summary: "Set a project list's color",
+          positionals: [
+            { name: "list", description: "Project list name", required: true },
+            {
+              name: "color",
+              description: `One of ${TODO_COLORS.join(", ")}`,
+              required: true,
+            },
+          ],
+          options: { json: jsonOption },
+          async run({ positionals, options }) {
+            const color = todoColorSchema.safeParse(positionals.color);
+            if (!color.success) {
+              throw new PluginCliError(`Unknown list color: ${positionals.color}`, {
+                code: "invalid_color",
+                hint: `Use one of ${TODO_COLORS.join(", ")}.`,
+              });
+            }
+            const summary = await cliCall(() => setListColor(positionals.list.trim(), color.data));
+            return reply(summary, options.json, () => `${summary.name} is ${summary.color}`);
+          },
+        }),
+
+        history: cliCommand({
+          summary: "Show recent todo changes that can be undone",
+          options: {
+            limit: {
+              type: "integer",
+              min: 1,
+              max: 100,
+              default: TODO_REVISION_LIMIT_DEFAULT,
+              description: "How many revisions to return (1-100, default 20).",
+            },
+            json: jsonOption,
+          },
+          async run({ options }) {
+            const revisions = listRevisions(options.limit);
+            return reply({ revisions }, options.json, () =>
+              revisions.length === 0
+                ? "No changes."
+                : revisions
+                    .map((revision) => {
+                      const undone = revision.undoneAt ? " undone" : "";
+                      return `#${revision.rev}  ${revision.createdAt}  ${revision.actor}  ${revision.summary}${undone}`;
+                    })
+                    .join("\n"),
+            );
+          },
+        }),
+
+        undo: cliCommand({
+          summary: "Undo a recorded todo change",
+          description:
+            "Restores the items touched by that change. With no revision, undoes the latest change that is not itself an undo.",
+          positionals: [
+            { name: "rev", description: "Revision number from `bb todo history`", required: false },
+          ],
+          options: { json: jsonOption },
+          async run({ positionals, options }, ctx) {
+            let rev: number | undefined;
+            if (positionals.rev !== undefined) {
+              rev = Number(positionals.rev);
+              if (!Number.isSafeInteger(rev) || rev < 1) {
+                throw new PluginCliError(`Invalid revision: ${positionals.rev}`, {
+                  code: "invalid_revision",
+                  hint: "Pass a positive revision number from `bb todo history`.",
+                });
+              }
+            }
+            const result = await cliCall(() => undoRevision(rev, revisionActor(ctx)));
+            return reply(result, options.json, () => result.revision.summary);
           },
         }),
       },

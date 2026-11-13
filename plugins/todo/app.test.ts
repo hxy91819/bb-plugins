@@ -4,10 +4,14 @@ import { createElement } from "react";
 import { JSDOM } from "jsdom";
 import {
   TODO_CHANGED_EVENT,
+  TODO_COLORS,
   rpcContract,
+  type TodoColor,
   type TodoCounts,
   type TodoFormalBucket,
   type TodoItem,
+  type TodoListSummary,
+  type TodoRevision,
   type TodoSnapshot,
 } from "./contract";
 
@@ -37,7 +41,10 @@ function makeItem(seq: number, overrides: Partial<TodoItem> = {}): TodoItem {
     notes: "",
     nextStep: "",
     proposalReason: null,
+    listName: "",
+    sectionName: "",
     completedAt: null,
+    deletedAt: null,
     sortOrder: 0,
     createdAt,
     updatedAt: createdAt,
@@ -51,6 +58,8 @@ class Store {
   nextSeq = 1;
   items: TodoItem[] = [];
   failSnapshot = false;
+  colors = new Map<string, TodoColor>();
+  revisions: TodoRevision[] = [];
 
   add(overrides: Partial<TodoItem> = {}): TodoItem {
     const item = makeItem(this.nextSeq++, overrides);
@@ -77,6 +86,21 @@ class Store {
       open: formal.length,
       done: this.items.filter((item) => item.completedAt !== null).length,
     };
+    const lists = new Map<string, TodoListSummary>();
+    for (const item of formal) {
+      if (!item.listName) continue;
+      const current = lists.get(item.listName) ?? {
+        name: item.listName,
+        color: this.colors.get(item.listName) ?? TODO_COLORS[lists.size % TODO_COLORS.length] ?? "blue",
+        openCount: 0,
+        sections: [],
+      };
+      current.openCount += 1;
+      if (item.sectionName && !current.sections.includes(item.sectionName)) {
+        current.sections.push(item.sectionName);
+      }
+      lists.set(item.listName, current);
+    }
     return {
       buckets: {
         focus: bucket("focus"),
@@ -87,10 +111,11 @@ class Store {
           .sort((a, b) => b.seq - a.seq),
       },
       done: this.items
-        .filter((item) => item.completedAt !== null)
+        .filter((item) => item.completedAt === null ? false : item.deletedAt === null)
         .sort((a, b) => String(b.completedAt).localeCompare(String(a.completedAt)))
         .slice(0, 20),
       counts,
+      lists: [...lists.values()],
     };
   }
 }
@@ -105,20 +130,29 @@ function handlers(store: Store) {
       if (store.failSnapshot) throw new Error("snapshot unavailable");
       return store.snapshot();
     },
-    quickAdd: (input: { title: string; bucket?: TodoFormalBucket }) =>
-      store.add({ title: input.title, bucket: input.bucket ?? "focus" }),
+    quickAdd: (input: { title: string; bucket?: TodoFormalBucket; listName?: string; sectionName?: string }) =>
+      store.add({
+        title: input.title,
+        bucket: input.bucket ?? "focus",
+        listName: input.listName ?? "",
+        sectionName: input.sectionName ?? "",
+      }),
     update: (input: {
       id: string;
       title?: string;
       bucket?: TodoFormalBucket;
       notes?: string;
       nextStep?: string;
+      listName?: string;
+      sectionName?: string;
     }) => {
       const item = store.find(input.id);
       if (input.title !== undefined) item.title = input.title;
       if (input.bucket !== undefined) item.bucket = input.bucket;
       if (input.notes !== undefined) item.notes = input.notes;
       if (input.nextStep !== undefined) item.nextStep = input.nextStep;
+      if (input.listName !== undefined) item.listName = input.listName;
+      if (input.sectionName !== undefined) item.sectionName = input.sectionName;
       return touch(item);
     },
     setCompleted: (input: { id: string; completed: boolean }) => {
@@ -164,6 +198,27 @@ function handlers(store: Store) {
       const before = store.items.length;
       store.items = store.items.filter((item) => item.id !== input.id);
       return { removed: store.items.length !== before };
+    },
+    setListColor: (input: { listName: string; color: TodoColor }) => {
+      store.colors.set(input.listName, input.color);
+      const summary = store.snapshot().lists.find((list) => list.name === input.listName);
+      return summary ?? { name: input.listName, color: input.color, openCount: 0, sections: [] };
+    },
+    listRevisions: () => ({ revisions: store.revisions }),
+    undoRevision: (input: { rev?: number }) => {
+      const target = store.revisions.find((revision) => revision.rev === input.rev);
+      assert.ok(target, "missing revision");
+      target.undoneAt = createdAt;
+      return {
+        undoneRev: target.rev,
+        revision: {
+          ...target,
+          rev: 900,
+          action: "undo" as const,
+          summary: `撤销 #${target.rev}：${target.summary}`,
+          undoneAt: null,
+        },
+      };
     },
     prepareStartSession: (input: { id: string }) => {
       const item = store.find(input.id);
@@ -540,7 +595,8 @@ test("未修改的详情跟上服务端字段，编辑中的草稿不被 realtim
     ];
     await slot.behavior.emitRealtime(TODO_CHANGED_EVENT, {});
     await slot.findByText("后台写入的日志");
-    await slot.findByRole("button", { name: "打开会话 后台会话" });
+    const sessionButtons = await slot.findAllByRole("button", { name: "打开会话 后台会话" });
+    assert.ok(sessionButtons.some((button) => button.textContent?.includes("后台会话")));
     assert.equal(nextStep().value, "草稿下一步");
     assert.equal(title().value, "写前端");
     assert.equal((slot.getByLabelText("备注 T-1") as HTMLTextAreaElement).value, "旧备注");
@@ -625,6 +681,154 @@ test("未完成正式待办的新会话按钮把 prepareStartSession 送进作�
         initialPrompt: "推进待办 T-4：全新",
       },
     });
+  } finally {
+    slot.lifecycle.unmount();
+  }
+});
+
+test("项目列表筛选、Section 折叠，以及选中列表时 QuickAdd 继承列表", async () => {
+  const store = new Store();
+  store.add({
+    title: "写 demo 期方案",
+    listName: "LightSpace",
+    sectionName: "Hosting Station",
+  });
+  store.add({ title: "双形态上架", listName: "LightPower" });
+  store.add({ title: "还没归类" });
+  const slot = await mountedPanel(store);
+  try {
+    await slot.findByText("写 demo 期方案");
+    fireEvent.click(slot.getByRole("button", { name: /LightSpace/ }));
+    await waitUntil(() => {
+      if (slot.queryByText("双形态上架") !== null) throw new Error("other list still visible");
+      if (slot.queryByText("还没归类") !== null) throw new Error("uncategorized still visible");
+      return slot.getByRole("button", { name: /Hosting Station/ });
+    });
+
+    fireEvent.click(slot.getByRole("button", { name: /Hosting Station/ }));
+    await waitUntil(() => {
+      if (slot.queryByText("写 demo 期方案") !== null) throw new Error("section still open");
+      return true;
+    });
+
+    const input = slot.getByRole("textbox", { name: "新待办标题" });
+    fireEvent.change(input, { target: { value: "跟当前列表" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() =>
+      assert.deepEqual(slot.inspection.rpcCalls.find((call) => call.method === "quickAdd"), {
+        method: "quickAdd",
+        input: { title: "跟当前列表", bucket: "focus", listName: "LightSpace" },
+      }),
+    );
+
+    fireEvent.change(input, { target: { value: "#Other 另一件事" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() =>
+      assert.deepEqual(slot.inspection.rpcCalls.filter((call) => call.method === "quickAdd").at(-1), {
+        method: "quickAdd",
+        input: { title: "#Other 另一件事", bucket: "focus" },
+      }),
+    );
+
+    fireEvent.click(slot.getByRole("button", { name: "更换 LightSpace 的颜色" }));
+    fireEvent.click(slot.getByRole("option", { name: "颜色 orange" }));
+    await waitFor(() =>
+      assert.deepEqual(slot.inspection.rpcCalls.find((call) => call.method === "setListColor"), {
+        method: "setListColor",
+        input: { listName: "LightSpace", color: "orange" },
+      }),
+    );
+  } finally {
+    slot.lifecycle.unmount();
+  }
+});
+
+test("折叠行把定宽操作轨放在右侧，长标题与下一步在主列折行，会话胶囊只在详情里", async () => {
+  const store = new Store();
+  const title = "把托管站的双形态上架方案整理成一份可以交给生产环境的说明";
+  const nextStep = "先补齐演示环境的验收清单，再把生产上架步骤拆成可单独派发的检查项，避免把整份方案揉成一步";
+  store.add({
+    title,
+    nextStep,
+    listName: "LightSpace",
+    threads: [
+      {
+        threadId: "thr-a",
+        note: "",
+        linkedAt: createdAt,
+        threadTitle: "会话甲",
+        threadStatus: "active",
+      },
+      {
+        threadId: "thr-b",
+        note: "",
+        linkedAt: createdAt,
+        threadTitle: "会话乙",
+        threadStatus: "idle",
+      },
+    ],
+  });
+  const slot = await mountedPanel(store);
+  try {
+    const titleNode = await slot.findByText(title);
+    assert.ok(titleNode.className.includes("break-words"));
+    assert.ok(titleNode.className.includes("font-medium"));
+    const nextNode = slot.getByText(nextStep);
+    assert.ok(nextNode.className.includes("line-clamp-2"));
+    assert.ok(nextNode.className.includes("break-words"));
+    assert.equal(nextNode.textContent?.startsWith("下一步："), false);
+
+    const row = titleNode.closest("[data-todo-row]");
+    assert.ok(row);
+    const rail = row.querySelector("[data-todo-rail]");
+    const main = row.querySelector("[data-todo-main]");
+    assert.ok(rail);
+    assert.ok(main);
+    assert.equal(rail.contains(titleNode), false);
+    assert.equal(main.contains(titleNode), true);
+    assert.equal(within(row as HTMLElement).queryByRole("button", { name: "打开会话 会话甲" }), null);
+    assert.ok(within(row as HTMLElement).getByRole("button", { name: "查看 2 个关联会话" }));
+
+    fireEvent.click(slot.getByRole("button", { name: "查看 2 个关联会话" }));
+    assert.ok(await slot.findByRole("button", { name: "打开会话 会话甲" }));
+    assert.ok(slot.getByRole("button", { name: "打开会话 会话乙" }));
+    const quickAdd = slot.getByRole("textbox", { name: "新待办标题" });
+    assert.ok(quickAdd.className.includes("text-base"));
+    assert.ok(quickAdd.className.includes("sm:text-sm"));
+  } finally {
+    slot.lifecycle.unmount();
+  }
+});
+
+test("最近变更抽屉可以撤销一条记录", async () => {
+  const store = new Store();
+  store.add({ title: "会被改掉" });
+  store.revisions.push({
+    rev: 3,
+    itemSeq: 1,
+    itemId: "T-1",
+    action: "delete",
+    actor: "agent:thr_demo",
+    summary: "删除 T-1「会被改掉」",
+    undoneAt: null,
+    createdAt,
+  });
+  const slot = await mountedPanel(store);
+  try {
+    fireEvent.click(await slot.findByRole("button", { name: /最近变更/ }));
+    assert.ok(await slot.findByText("删除 T-1「会被改掉」"));
+    assert.ok(slot.getByText(/@thread:thr_demo/));
+    fireEvent.click(slot.getByRole("button", { name: "撤销 删除 T-1「会被改掉」" }));
+    await waitFor(() => {
+      assert.deepEqual(slot.inspection.rpcCalls.find((call) => call.method === "undoRevision"), {
+        method: "undoRevision",
+        input: { rev: 3 },
+      });
+      if (slot.queryByRole("button", { name: "撤销 删除 T-1「会被改掉」" }) !== null) {
+        throw new Error("undo button still visible");
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
   } finally {
     slot.lifecycle.unmount();
   }
