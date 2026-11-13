@@ -75,8 +75,13 @@ accepts a separate next-step field.
 `propose` and leave the inbox only through `triage`; `update` and `done` reject
 inbox items. `rm` sets `deleted_at` and keeps logs and thread links. Creates,
 edits, completions, triage, and deletes record a revision in the same
-transaction. `history` lists them; `undo` writes the previous snapshot back.
-Undoing a merge restores both the proposal and the target.
+transaction. `history` lists them. `undo` restores the item row without
+replaying old threads or logs, so progress an agent wrote after the revision
+survives; a completion or acceptance only removes the log that operation itself
+added, and a merge moves the source's logs back while keeping everything the
+target gained afterwards. Undo is newest-first: asking for an older revision
+while a newer one is still active returns `history_stale` instead of silently
+covering the newer change.
 
 `bb todo start <id>` builds the same prompt as the panel action, spawns a
 thread with `project-default`, and links that thread back to the todo. The
@@ -105,10 +110,18 @@ repeats the page title.
 - **Lists**: a capsule bar filters by project list. The selected list can change
   color. Named lists are grouped by default, so each project opens as a colored
   card with collapsible section headings; “按项目分组” toggles the flat view.
+  The filter, grouping, collapsed sections, and completed drawer state persist
+  in `localStorage` (`bb-plugin-todo:view-state:v1`), so leaving for a session
+  and coming back keeps the same view. A persisted filter whose list no longer
+  exists in the snapshot falls back to “全部” after the first load.
 - **Rows**: the round checkbox uses the list color. The collapsed row is one
   clean title with a fixed right rail (soft thread-count capsule, ghost
-  new-session icon, disclosure), with no repeated id or next-step line. The
-  `T-17` id appears in the row's hover title and in the expanded detail header.
+  new-session icon, disclosure), with no repeated id or next-step line. Clicking
+  the title edits it in place in a borderless auto-growing textarea; Enter
+  (outside an IME composition) or blur saves, Escape cancels, and an empty draft
+  restores the original title. Only the disclosure chevron or the row's blank
+  edge expands details; a title click always starts inline editing instead.
+  The `T-17` id appears in the row's hover title and in the expanded detail header.
   Expanded rows edit the title, bucket, list, section, and notes, show the full
   thread capsules, agent logs, delete, and the labeled new-session control. In
   the flat “全部” view a soft list chip follows the title. Log thread ids

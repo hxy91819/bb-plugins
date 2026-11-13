@@ -1048,11 +1048,13 @@ test("lists take distinct palette colors, titles can carry #List/Section, and un
     const completed = (await runJson(harness, ["show", linked.id])) as TodoItem;
     assert.ok(completed.completedAt);
     assert.equal(completed.logs.some((log) => log.text === "Shipped"), true);
+    await runJson(harness, ["log", linked.id, "完成之后补充的日志", "--no-link"]);
     await runJson(harness, ["undo"]);
     const reopened = (await runJson(harness, ["show", linked.id])) as TodoItem;
     assert.equal(reopened.completedAt, null);
     assert.equal(reopened.logs.some((log) => log.text === "Shipped"), false);
     assert.equal(reopened.logs.some((log) => log.text === "留下的日志"), true);
+    assert.equal(reopened.logs.some((log) => log.text === "完成之后补充的日志"), true);
 
     const target = (await runJson(harness, ["add", "合并目标", "--next-step", "keep target"])) as TodoItem;
     assert.equal(target.notes, "keep target");
@@ -1072,6 +1074,8 @@ test("lists take distinct palette colors, titles can carry #List/Section, and un
     await runJson(harness, ["link", source.id, "--thread", "thr-source", "--note", "source note"]);
     await runJson(harness, ["triage", source.id, "--action", "merge", "--into", target.id]);
     assert.equal((await runJsonError(harness, ["show", source.id])).error.code, "not_found");
+    await runJson(harness, ["log", target.id, "合并之后写的日志", "--no-link"]);
+    await runJson(harness, ["link", target.id, "--thread", "thr-after-merge", "--note", "after merge"]);
     await runJson(harness, ["undo"]);
     const sourceBack = (await runJson(harness, ["show", source.id])) as TodoItem;
     const targetBack = (await runJson(harness, ["show", target.id])) as TodoItem;
@@ -1084,7 +1088,9 @@ test("lists take distinct palette colors, titles can carry #List/Section, and un
     assert.equal(targetBack.logs.some((log) => log.text === "target log"), true);
     assert.equal(targetBack.logs.some((log) => /Merged inbox proposal/.test(log.text)), false);
     assert.equal(targetBack.logs.some((log) => log.text === "source log"), false);
+    assert.equal(targetBack.logs.some((log) => log.text === "合并之后写的日志"), true);
     assert.equal(targetBack.threads.find((thread) => thread.threadId === "thr-target")?.note, "target note");
+    assert.equal(targetBack.threads.find((thread) => thread.threadId === "thr-after-merge")?.note, "after merge");
     assert.equal(targetBack.threads.some((thread) => thread.threadId === "thr-source"), false);
 
     const limited = (await runJson(harness, ["history", "--limit", "2"])) as {
@@ -1108,6 +1114,74 @@ test("lists take distinct palette colors, titles can carry #List/Section, and un
       (await runJsonError(harness, ["undo", String(undoneDelete.undoneRev)])).error.code,
       "already_undone",
     );
+  } finally {
+    await harness.lifecycle.dispose();
+  }
+});
+
+test("undoing an update keeps logs and thread links written afterwards", async () => {
+  const { bb, harness } = fixture();
+  try {
+    await plugin(bb);
+    const created = (await runJson(harness, ["add", "初始标题"])) as TodoItem;
+    const updated = (await runJson(harness, [
+      "update",
+      created.id,
+      "--title",
+      "改后标题",
+    ])) as TodoItem;
+    assert.equal(updated.title, "改后标题");
+
+    await runJson(harness, ["log", created.id, "update 之后写的日志", "--no-link"]);
+    await runJson(harness, ["link", created.id, "--thread", "thr-after-update", "--note", "after"]);
+    const undone = (await runJson(harness, ["undo"])) as { undoneRev: number };
+    assert.equal(undone.undoneRev, 2);
+
+    const restored = (await runJson(harness, ["show", created.id])) as TodoItem;
+    assert.equal(restored.title, "初始标题");
+    assert.equal(restored.logs.some((log) => log.text === "update 之后写的日志"), true);
+    assert.equal(
+      restored.threads.find((thread) => thread.threadId === "thr-after-update")?.note,
+      "after",
+    );
+  } finally {
+    await harness.lifecycle.dispose();
+  }
+});
+
+test("out-of-order undo returns history_stale; newest-first undo succeeds", async () => {
+  const { bb, harness } = fixture();
+  try {
+    await plugin(bb);
+    const created = (await runJson(harness, ["add", "标题零"])) as TodoItem;
+    await runJson(harness, ["update", created.id, "--title", "标题一"]);
+    await runJson(harness, ["update", created.id, "--title", "标题二"]);
+
+    const history = (await runJson(harness, ["history"])) as { revisions: TodoRevision[] };
+    const updates = history.revisions
+      .filter((revision) => revision.action === "update")
+      .sort((left, right) => left.rev - right.rev);
+    const older = updates[0];
+    const newer = updates[1];
+    assert.ok(older);
+    assert.ok(newer);
+
+    const stale = await runJsonError(harness, ["undo", String(older.rev)]);
+    assert.equal(stale.error.code, "history_stale");
+    assert.match(stale.error.message, new RegExp(`#${newer.rev}`));
+    assert.equal(((await runJson(harness, ["show", created.id])) as TodoItem).title, "标题二");
+
+    const undoneNewest = (await runJson(harness, ["undo", String(newer.rev)])) as {
+      undoneRev: number;
+    };
+    assert.equal(undoneNewest.undoneRev, newer.rev);
+    assert.equal(((await runJson(harness, ["show", created.id])) as TodoItem).title, "标题一");
+
+    const undoneOlder = (await runJson(harness, ["undo", String(older.rev)])) as {
+      undoneRev: number;
+    };
+    assert.equal(undoneOlder.undoneRev, older.rev);
+    assert.equal(((await runJson(harness, ["show", created.id])) as TodoItem).title, "标题零");
   } finally {
     await harness.lifecycle.dispose();
   }

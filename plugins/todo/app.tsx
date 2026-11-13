@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
+import type {
+  CSSProperties,
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+} from "react";
 import {
   definePluginApp,
   useBbNavigate,
@@ -51,6 +55,71 @@ const COLOR_STYLE: Record<TodoColor, { solid: string; soft: string }> = {
   amber: { solid: "#C48A00", soft: "rgba(196,138,0,0.18)" },
   indigo: { solid: "#5856D6", soft: "rgba(88,86,214,0.16)" },
 };
+
+const VIEW_STATE_STORAGE_KEY = "bb-plugin-todo:view-state:v1";
+
+type TodoViewState = {
+  listFilter: string | null;
+  groupByList: boolean;
+  collapsedSections: string[];
+  showDone: boolean;
+};
+
+const DEFAULT_VIEW_STATE: TodoViewState = {
+  listFilter: null,
+  groupByList: true,
+  collapsedSections: [],
+  showDone: false,
+};
+
+function viewStorage(): Storage | null {
+  try {
+    if (typeof window === "undefined") return null;
+    return window.localStorage;
+  } catch {
+    // Private mode can throw on access; the panel still works in memory.
+    return null;
+  }
+}
+
+function readViewState(): TodoViewState {
+  const store = viewStorage();
+  if (store === null) return DEFAULT_VIEW_STATE;
+  try {
+    const raw = store.getItem(VIEW_STATE_STORAGE_KEY);
+    if (raw === null) return DEFAULT_VIEW_STATE;
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed !== "object" || parsed === null) return DEFAULT_VIEW_STATE;
+    const record = parsed as Record<string, unknown>;
+    return {
+      listFilter:
+        record.listFilter === null || typeof record.listFilter === "string"
+          ? record.listFilter
+          : DEFAULT_VIEW_STATE.listFilter,
+      groupByList:
+        typeof record.groupByList === "boolean"
+          ? record.groupByList
+          : DEFAULT_VIEW_STATE.groupByList,
+      collapsedSections: Array.isArray(record.collapsedSections)
+        ? record.collapsedSections.filter((value): value is string => typeof value === "string")
+        : [],
+      showDone:
+        typeof record.showDone === "boolean" ? record.showDone : DEFAULT_VIEW_STATE.showDone,
+    };
+  } catch {
+    return DEFAULT_VIEW_STATE;
+  }
+}
+
+function writeViewState(state: TodoViewState): void {
+  const store = viewStorage();
+  if (store === null) return;
+  try {
+    store.setItem(VIEW_STATE_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Quota or private-mode failures must never break the panel.
+  }
+}
 
 const fieldClassName =
   "w-full touch-manipulation rounded-lg border border-border bg-background px-2.5 py-1.5 text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm";
@@ -842,11 +911,92 @@ function TodoRow({
   const rpc = useRpc<typeof rpcContract>();
   const [pendingCompleted, setPendingCompleted] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [draftTitle, setDraftTitle] = useState(item.title);
+  const [optimisticTitle, setOptimisticTitle] = useState<string | null>(null);
+  const titleInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const titleComposing = useRef(false);
+  const titleEditSettled = useRef(false);
   const detailsId = `todo-details-${item.id}`;
   const completed = item.completedAt !== null;
   const checked = completed || pendingCompleted;
   const color = colorOf(lists, item.listName);
   const listNames = lists.map((list) => list.name);
+
+  useEffect(() => {
+    // A realtime refresh or the post-save snapshot now owns the title.
+    setOptimisticTitle(null);
+  }, [item.title]);
+
+  const resizeTitleInput = () => {
+    const element = titleInputRef.current;
+    if (!element) return;
+    element.style.height = "auto";
+    const nextHeight = element.scrollHeight;
+    element.style.height = nextHeight > 0 ? `${nextHeight}px` : "";
+  };
+
+  useEffect(() => {
+    if (!editingTitle) return;
+    const element = titleInputRef.current;
+    if (!element) return;
+    element.focus();
+    const end = element.value.length;
+    element.setSelectionRange(end, end);
+    resizeTitleInput();
+  }, [editingTitle]);
+
+  useEffect(() => {
+    if (editingTitle) resizeTitleInput();
+  }, [draftTitle, editingTitle]);
+
+  const beginTitleEdit = () => {
+    titleEditSettled.current = false;
+    titleComposing.current = false;
+    setDraftTitle(item.title);
+    setEditingTitle(true);
+  };
+
+  const commitTitle = () => {
+    if (titleEditSettled.current) return;
+    titleEditSettled.current = true;
+    const trimmed = draftTitle.trim();
+    setEditingTitle(false);
+    if (trimmed.length === 0 || trimmed === item.title) {
+      setDraftTitle(item.title);
+      return;
+    }
+    setOptimisticTitle(trimmed);
+    void rpc.call("update", { id: item.id, title: trimmed }).then(
+      () => {
+        onChanged();
+      },
+      () => {
+        setOptimisticTitle(null);
+        onError(`没能保存 ${item.id} 的标题。`);
+      },
+    );
+  };
+
+  const cancelTitleEdit = () => {
+    titleEditSettled.current = true;
+    setDraftTitle(item.title);
+    setEditingTitle(false);
+    titleInputRef.current?.blur();
+  };
+
+  const onTitleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    // Enter that confirms an IME candidate belongs to the IME, never to save.
+    if (titleComposing.current || event.nativeEvent.isComposing) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelTitleEdit();
+      return;
+    }
+    if (event.key !== "Enter" || event.shiftKey) return;
+    event.preventDefault();
+    commitTitle();
+  };
 
   const toggleCompleted = async () => {
     if (busy) return;
@@ -904,13 +1054,41 @@ function TodoRow({
         </button>
         <div className="min-w-0 flex-1" data-todo-main>
           <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
-            <p
-              data-todo-title
-              title={`${item.id} ${item.title}`}
-              className="min-w-0 break-words text-sm font-medium leading-5 text-foreground"
-            >
-              {item.title}
-            </p>
+            {editingTitle ? (
+              <textarea
+                ref={titleInputRef}
+                aria-label={`编辑标题 ${item.id}`}
+                rows={1}
+                value={draftTitle}
+                maxLength={500}
+                onChange={(event) => setDraftTitle(event.target.value)}
+                onCompositionStart={() => {
+                  titleComposing.current = true;
+                }}
+                onCompositionEnd={() => {
+                  titleComposing.current = false;
+                }}
+                onKeyDown={onTitleKeyDown}
+                onBlur={() => {
+                  if (titleEditSettled.current) return;
+                  commitTitle();
+                }}
+                className="block min-w-0 flex-1 resize-none overflow-hidden rounded-none border-0 border-b border-primary/35 bg-transparent p-0 text-base font-medium leading-5 text-foreground outline-none transition-colors focus:border-primary focus:bg-muted/30 focus:outline-none sm:text-sm"
+              />
+            ) : (
+              <button
+                type="button"
+                data-todo-title
+                title={`${item.id} ${item.title}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  beginTitleEdit();
+                }}
+                className="min-w-0 max-w-full touch-manipulation cursor-text appearance-none break-words border-0 bg-transparent p-0 text-left text-sm font-medium leading-5 text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {optimisticTitle ?? item.title}
+              </button>
+            )}
             {showListChip && item.listName ? (
               <span
                 className="inline-flex max-w-full shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] text-muted-foreground"
@@ -1501,10 +1679,15 @@ function TodoPanel(_props: PluginNavPanelProps) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [showDone, setShowDone] = useState(false);
-  const [listFilter, setListFilter] = useState<string | null>(null);
-  const [groupByList, setGroupByList] = useState(true);
-  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => new Set());
+  const initialViewState = useRef<TodoViewState | null>(null);
+  if (initialViewState.current === null) initialViewState.current = readViewState();
+  const initialView = initialViewState.current;
+  const [showDone, setShowDone] = useState(initialView.showDone);
+  const [listFilter, setListFilter] = useState<string | null>(initialView.listFilter);
+  const [groupByList, setGroupByList] = useState(initialView.groupByList);
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(
+    () => new Set(initialView.collapsedSections),
+  );
 
   const refresh = useCallback(() => {
     setActionError(null);
@@ -1533,6 +1716,28 @@ function TodoPanel(_props: PluginNavPanelProps) {
   }, [rpc, revision]);
 
   useRealtime(TODO_CHANGED_EVENT, refresh);
+
+  useEffect(() => {
+    writeViewState({
+      listFilter,
+      groupByList,
+      collapsedSections: [...collapsedSections],
+      showDone,
+    });
+  }, [collapsedSections, groupByList, listFilter, showDone]);
+
+  useEffect(() => {
+    // Only heal after the first snapshot. Before that, lists and done are
+    // simply unknown and hydrated filters must be left untouched.
+    if (snapshot === null) return;
+    setListFilter((current) => {
+      if (current === null || current.length === 0) return current;
+      const stillExists =
+        snapshot.lists.some((list) => list.name === current) ||
+        snapshot.done.some((item) => item.listName === current);
+      return stillExists ? current : null;
+    });
+  }, [snapshot]);
 
   const report = useCallback((message: string) => {
     setActionError(message);

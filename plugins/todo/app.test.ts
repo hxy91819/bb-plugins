@@ -1,4 +1,4 @@
-import { test, after } from "node:test";
+import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import { JSDOM } from "jsdom";
@@ -28,6 +28,10 @@ after(() => {
     if (descriptor) Object.defineProperty(globalThis, key, descriptor);
     else Reflect.deleteProperty(globalThis, key);
   }
+});
+
+beforeEach(() => {
+  dom.window.localStorage.clear();
 });
 
 const createdAt = "2026-11-13T10:00:00.000Z";
@@ -478,7 +482,7 @@ test("行内详情保存标题、备注与分组，并可删除条目", async ()
   const slot = await mountedPanel(store);
   try {
     await slot.findByText("写前端");
-    fireEvent.click(slot.getByText("写前端"));
+    fireEvent.click(slot.getByRole("button", { name: "展开 T-1 详情" }));
     assert.equal(slot.queryByLabelText("下一步 T-1"), null);
     fireEvent.change(slot.getByLabelText("标题 T-1"), { target: { value: "写清亮前端" } });
     fireEvent.change(slot.getByLabelText("分组 T-1"), { target: { value: "waiting" } });
@@ -563,7 +567,7 @@ test("未修改的详情跟上服务端字段，编辑中的草稿不被 realtim
   const slot = await mountedPanel(store);
   try {
     await slot.findByText("写前端");
-    fireEvent.click(slot.getByText("写前端"));
+    fireEvent.click(slot.getByRole("button", { name: "展开 T-1 详情" }));
     const notes = () => slot.getByLabelText("备注 T-1") as HTMLTextAreaElement;
     const title = () => slot.getByLabelText("标题 T-1") as HTMLInputElement;
     assert.equal(notes().value, "旧备注");
@@ -660,7 +664,7 @@ test("未完成正式待办的新会话按钮把 prepareStartSession 送进作�
       },
     });
 
-    fireEvent.click(slot.getByText("继续做"));
+    fireEvent.click(slot.getByRole("button", { name: "展开 T-1 详情" }));
     const detailButtons = slot.getAllByRole("button", {
       name: "开启新会话并带入 1 个关联会话上下文（T-1）",
     });
@@ -872,6 +876,141 @@ test("最近变更抽屉可以撤销一条记录", async () => {
       }
     });
     await new Promise((resolve) => setTimeout(resolve, 30));
+  } finally {
+    slot.lifecycle.unmount();
+  }
+});
+
+test("折叠行标题可原地编辑：Enter 与失焦保存，Escape 取消", async () => {
+  const store = new Store();
+  store.add({ title: "写前端" });
+  const slot = await mountedPanel(store);
+  try {
+    await slot.findByText("写前端");
+    fireEvent.click(slot.getByText("写前端"));
+    const editor = (await slot.findByLabelText("编辑标题 T-1")) as HTMLTextAreaElement;
+    assert.equal(editor.value, "写前端");
+    assert.equal(editor.getAttribute("rows"), "1");
+    assert.ok(editor.className.includes("resize-none"));
+    assert.ok(editor.className.includes("border-0"));
+    assert.ok(editor.className.includes("text-base"));
+    assert.ok(editor.className.includes("sm:text-sm"));
+    // The click edits the row itself and does not open details.
+    assert.equal(slot.queryByLabelText("标题 T-1"), null);
+
+    fireEvent.change(editor, { target: { value: "写清亮前端" } });
+    fireEvent.keyDown(editor, { key: "Enter" });
+    await waitFor(() =>
+      assert.deepEqual(slot.inspection.rpcCalls.find((call) => call.method === "update"), {
+        method: "update",
+        input: { id: "T-1", title: "写清亮前端" },
+      }),
+    );
+    await slot.findByText("写清亮前端");
+    assert.equal(slot.queryByLabelText("标题 T-1"), null);
+
+    fireEvent.click(slot.getByText("写清亮前端"));
+    const blurEditor = await slot.findByLabelText("编辑标题 T-1");
+    fireEvent.change(blurEditor, { target: { value: "写稳定前端" } });
+    fireEvent.blur(blurEditor);
+    await waitFor(() =>
+      assert.deepEqual(slot.inspection.rpcCalls.filter((call) => call.method === "update").at(-1), {
+        method: "update",
+        input: { id: "T-1", title: "写稳定前端" },
+      }),
+    );
+    await slot.findByText("写稳定前端");
+
+    fireEvent.click(slot.getByText("写稳定前端"));
+    const cancelEditor = await slot.findByLabelText("编辑标题 T-1");
+    fireEvent.change(cancelEditor, { target: { value: "不该保存" } });
+    fireEvent.keyDown(cancelEditor, { key: "Escape" });
+    await slot.findByText("写稳定前端");
+    assert.equal(slot.queryByLabelText("编辑标题 T-1"), null);
+    assert.equal(slot.inspection.rpcCalls.filter((call) => call.method === "update").length, 2);
+
+    // Confirming an IME candidate with Enter must never save.
+    fireEvent.click(slot.getByText("写稳定前端"));
+    const imeEditor = await slot.findByLabelText("编辑标题 T-1");
+    fireEvent.compositionStart(imeEditor);
+    fireEvent.change(imeEditor, { target: { value: "输入法中的标题" } });
+    fireEvent.keyDown(imeEditor, { key: "Enter", isComposing: true });
+    assert.equal(slot.inspection.rpcCalls.filter((call) => call.method === "update").length, 2);
+    fireEvent.compositionEnd(imeEditor);
+  } finally {
+    slot.lifecycle.unmount();
+  }
+});
+
+test("项目列表筛选在卸载重挂后保持，列表消失时回退全部", async () => {
+  const store = new Store();
+  store.add({ title: "写 demo 期方案", listName: "LightSpace" });
+  store.add({ title: "双形态上架", listName: "LightPower" });
+  store.add({ title: "还没归类" });
+  const first = await mountedPanel(store);
+  try {
+    await first.findByText("写 demo 期方案");
+    fireEvent.click(first.getByRole("button", { name: /LightSpace/ }));
+    await waitUntil(() => {
+      if (first.queryByText("双形态上架") !== null) throw new Error("filter not applied");
+      return true;
+    });
+  } finally {
+    first.lifecycle.unmount();
+  }
+
+  const second = await mountedPanel(store);
+  try {
+    await second.findByText("写 demo 期方案");
+    await waitUntil(() => {
+      const active = second
+        .getAllByRole("button")
+        .find((button) => button.hasAttribute("aria-pressed") && button.textContent?.includes("LightSpace"));
+      if (!active || active.getAttribute("aria-pressed") !== "true") {
+        throw new Error("filter not restored");
+      }
+      if (second.queryByText("双形态上架") !== null) throw new Error("other list leaked");
+      return true;
+    });
+
+    // The persisted list no longer exists in lists or done → fall back to all.
+    store.find("T-1").listName = "LightPower";
+    await second.behavior.emitRealtime(TODO_CHANGED_EVENT, {});
+    await waitUntil(() => {
+      const all = second
+        .getAllByRole("button")
+        .find((button) => button.hasAttribute("aria-pressed") && button.textContent?.includes("全部"));
+      if (!all || all.getAttribute("aria-pressed") !== "true") {
+        throw new Error("filter not healed");
+      }
+      const staleCapsule = second
+        .getAllByRole("button")
+        .some((button) => button.hasAttribute("aria-pressed") && button.textContent?.includes("LightSpace"));
+      if (staleCapsule) throw new Error("stale list capsule still visible");
+      return second.getByText("双形态上架");
+    });
+  } finally {
+    second.lifecycle.unmount();
+  }
+});
+
+test("展开中的未修改详情跟随行内标题保存", async () => {
+  const store = new Store();
+  store.add({ title: "旧标题", notes: "旧备注" });
+  const slot = await mountedPanel(store);
+  try {
+    await slot.findByText("旧标题");
+    fireEvent.click(slot.getByRole("button", { name: "展开 T-1 详情" }));
+    const detailTitle = () => slot.getByLabelText("标题 T-1") as HTMLInputElement;
+    await slot.findByLabelText("标题 T-1");
+
+    fireEvent.click(slot.getByText("旧标题"));
+    const editor = await slot.findByLabelText("编辑标题 T-1");
+    fireEvent.change(editor, { target: { value: "新标题" } });
+    fireEvent.keyDown(editor, { key: "Enter" });
+    await waitFor(() => {
+      if (detailTitle().value !== "新标题") throw new Error(detailTitle().value);
+    });
   } finally {
     slot.lifecycle.unmount();
   }

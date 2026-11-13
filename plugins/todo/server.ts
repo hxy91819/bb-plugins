@@ -601,7 +601,12 @@ export default function plugin(bb: BbPluginApi): void {
     );
   };
 
-  const upsertBundle = (bundle: ItemSnapshot) => {
+  /**
+   * Restore only the item row. Threads and logs are intentionally left alone:
+   * an agent may have written progress after the revision being undone, and
+   * undoing an edit must not erase that newer history.
+   */
+  const upsertItemRow = (bundle: ItemSnapshot) => {
     const item = bundle.item;
     // `next_step` stays in old revision snapshots. Fold it into notes and
     // write an empty legacy column so undo cannot resurrect the retired field.
@@ -639,36 +644,132 @@ export default function plugin(bb: BbPluginApi): void {
       item.section_name,
       item.deleted_at,
     );
-    db.prepare("DELETE FROM todo_threads WHERE item_seq = ?").run(item.seq);
-    for (const thread of bundle.threads) {
+  };
+
+  const replaceItemThreads = (seq: number, threads: ThreadRow[]) => {
+    db.prepare("DELETE FROM todo_threads WHERE item_seq = ?").run(seq);
+    for (const thread of threads) {
       db.prepare(
         "INSERT INTO todo_threads (item_seq, thread_id, note, linked_at) VALUES (?, ?, ?, ?)",
-      ).run(thread.item_seq, thread.thread_id, thread.note, thread.linked_at);
+      ).run(seq, thread.thread_id, thread.note, thread.linked_at);
     }
   };
 
-  const restoreBundles = (bundles: ItemSnapshot[]) => {
-    const seqs = bundles.map((bundle) => bundle.item.seq);
-    const logIds = bundles.flatMap((bundle) => bundle.logs.map((log) => log.id));
-    if (seqs.length === 0) return;
-    const seqPlaceholders = seqs.map(() => "?").join(", ");
-    db.prepare(`DELETE FROM todo_threads WHERE item_seq IN (${seqPlaceholders})`).run(...seqs);
-    if (logIds.length > 0) {
-      const logPlaceholders = logIds.map(() => "?").join(", ");
-      db.prepare(
-        `DELETE FROM todo_logs WHERE item_seq IN (${seqPlaceholders}) OR id IN (${logPlaceholders})`,
-      ).run(...seqs, ...logIds);
-    } else {
-      db.prepare(`DELETE FROM todo_logs WHERE item_seq IN (${seqPlaceholders})`).run(...seqs);
+  const eachChunk = <T>(values: T[], run: (chunk: T[]) => void) => {
+    for (let index = 0; index < values.length; index += 500) {
+      run(values.slice(index, index + 500));
     }
-    for (const bundle of bundles) {
-      upsertBundle(bundle);
-      for (const log of bundle.logs) {
-        db.prepare(
-          "INSERT INTO todo_logs (id, item_seq, text, thread_id, created_at) VALUES (?, ?, ?, ?, ?)",
-        ).run(log.id, log.item_seq, log.text, log.thread_id, log.created_at);
+  };
+
+  const deleteLogsById = (ids: number[]) => {
+    eachChunk(ids, (chunk) => {
+      const placeholders = chunk.map(() => "?").join(", ");
+      db.prepare(`DELETE FROM todo_logs WHERE id IN (${placeholders})`).run(...chunk);
+    });
+  };
+
+  const moveLogsToItem = (seq: number, ids: number[]) => {
+    eachChunk(ids, (chunk) => {
+      const placeholders = chunk.map(() => "?").join(", ");
+      db.prepare(`UPDATE todo_logs SET item_seq = ? WHERE id IN (${placeholders})`).run(
+        seq,
+        ...chunk,
+      );
+    });
+  };
+
+  const deleteItemThreads = (seq: number, threadIds: string[]) => {
+    eachChunk(threadIds, (chunk) => {
+      const placeholders = chunk.map(() => "?").join(", ");
+      db.prepare(
+        `DELETE FROM todo_threads WHERE item_seq = ? AND thread_id IN (${placeholders})`,
+      ).run(seq, ...chunk);
+    });
+  };
+
+  /** Logs an action added itself, excluding logs it inherited from elsewhere. */
+  const addedLogIds = (
+    after: ItemSnapshot | undefined,
+    before: ItemSnapshot,
+    exclude: ReadonlySet<number> = new Set(),
+  ): number[] => {
+    if (!after) return [];
+    const beforeIds = new Set(before.logs.map((log) => log.id));
+    return after.logs
+      .filter((log) => !beforeIds.has(log.id) && !exclude.has(log.id))
+      .map((log) => log.id);
+  };
+
+  /**
+   * Undo by diff instead of replaying a whole bundle. A later `bb todo log`
+   * or `bb todo link` must survive the undo of an earlier revision.
+   */
+  const restoreRevision = (
+    action: TodoRevisionAction,
+    targetSeq: number,
+    before: ItemSnapshot[] | null,
+    after: ItemSnapshot[] | null,
+    timestamp: string,
+  ) => {
+    const beforeBundles = before ?? [];
+    if (action === "create" || beforeBundles.length === 0) {
+      // Created rows stay as soft-deleted tombstones, keeping later history.
+      for (const bundle of after ?? []) softDelete(bundle.item.seq, timestamp);
+      return;
+    }
+
+    if (action === "triage_merge") {
+      const source = beforeBundles.find((bundle) => bundle.item.seq !== targetSeq);
+      const target = beforeBundles.find((bundle) => bundle.item.seq === targetSeq);
+      if (source && target) {
+        const sourceSeq = source.item.seq;
+        const targetAfter = after?.find((bundle) => bundle.item.seq === targetSeq);
+        const sourceLogIds = source.logs.map((log) => log.id);
+        const sourceLogIdSet = new Set(sourceLogIds);
+
+        upsertItemRow(source);
+        replaceItemThreads(sourceSeq, source.threads);
+        // Logs moved onto the target by the merge go back to their source.
+        moveLogsToItem(sourceSeq, sourceLogIds);
+        // The merge summary is the only log the target itself gained. Source
+        // logs now in the after-snapshot are moved back, never deleted here.
+        deleteLogsById(addedLogIds(targetAfter, target, sourceLogIdSet));
+
+        const beforeThreadIds = new Set(target.threads.map((thread) => thread.thread_id));
+        const copiedThreadIds = (targetAfter?.threads ?? [])
+          .filter((thread) => !beforeThreadIds.has(thread.thread_id))
+          .map((thread) => thread.thread_id);
+        deleteItemThreads(targetSeq, copiedThreadIds);
+
+        // A merge "fill" can populate an empty note on a thread the target
+        // already had. Restore that original note; later explicit notes stay.
+        for (const thread of target.threads) {
+          const afterThread = targetAfter?.threads.find(
+            (candidate) => candidate.thread_id === thread.thread_id,
+          );
+          if (!afterThread || thread.note.trim().length > 0) continue;
+          const sourceThread = source.threads.find(
+            (candidate) => candidate.thread_id === thread.thread_id,
+          );
+          if (sourceThread && sourceThread.note.length > 0 && afterThread.note === sourceThread.note) {
+            db.prepare(
+              "UPDATE todo_threads SET note = ? WHERE item_seq = ? AND thread_id = ?",
+            ).run(thread.note, targetSeq, thread.thread_id);
+          }
+        }
+        return;
       }
     }
+
+    const selfAddedLogIds: number[] = [];
+    for (const bundle of beforeBundles) {
+      upsertItemRow(bundle);
+      if (action === "complete" || action === "triage_accept") {
+        const afterBundle = after?.find((candidate) => candidate.item.seq === bundle.item.seq);
+        selfAddedLogIds.push(...addedLogIds(afterBundle, bundle));
+      }
+    }
+    deleteLogsById(selfAddedLogIds);
   };
 
   const softDelete = (seq: number, timestamp: string) => {
@@ -1455,7 +1556,7 @@ export default function plugin(bb: BbPluginApi): void {
       | {
           rev: number;
           item_seq: number;
-          action: string;
+          action: TodoRevisionAction;
           summary: string;
           before_snapshot: string | null;
           after_snapshot: string | null;
@@ -1487,12 +1588,49 @@ export default function plugin(bb: BbPluginApi): void {
     }
     const before = decodeSnapshot(row.before_snapshot);
     const after = decodeSnapshot(row.after_snapshot);
+    const touchedSeqs = new Set<number>();
+    for (const bundle of [...(before ?? []), ...(after ?? [])]) {
+      touchedSeqs.add(bundle.item.seq);
+    }
+    if (touchedSeqs.size > 0) {
+      // An out-of-order undo would silently overwrite every later revision
+      // on the same item. Refuse it and let the caller undo newest-first.
+      const later = db
+        .prepare(
+          `SELECT rev, item_seq, before_snapshot, after_snapshot
+           FROM todo_revisions
+           WHERE rev > ? AND undone_at IS NULL AND action <> 'undo'
+           ORDER BY rev ASC`,
+        )
+        .all(row.rev) as {
+        rev: number;
+        item_seq: number;
+        before_snapshot: string | null;
+        after_snapshot: string | null;
+      }[];
+      const stale = later.find((candidate) => {
+        if (touchedSeqs.has(candidate.item_seq)) return true;
+        try {
+          const snapshots = [
+            ...(decodeSnapshot(candidate.before_snapshot) ?? []),
+            ...(decodeSnapshot(candidate.after_snapshot) ?? []),
+          ];
+          return snapshots.some((bundle) => touchedSeqs.has(bundle.item.seq));
+        } catch {
+          return false;
+        }
+      });
+      if (stale) {
+        throw new TodoError(
+          `该待办已有更新的修改（#${stale.rev}），请先按顺序撤销更新的记录`,
+          "history_stale",
+          `先撤销 #${stale.rev}，再撤销 #${row.rev}。`,
+        );
+      }
+    }
     const timestamp = now();
     const undone = db.transaction(() => {
-      if (before && before.length > 0) restoreBundles(before);
-      else {
-        for (const bundle of after ?? []) softDelete(bundle.item.seq, timestamp);
-      }
+      restoreRevision(row.action, row.item_seq, before, after, timestamp);
       db.prepare("UPDATE todo_revisions SET undone_at = ? WHERE rev = ?").run(timestamp, row.rev);
       const touched = (before && before.length > 0 ? before : (after ?? [])).map((bundle) => bundle.item.seq);
       const restored = touched
