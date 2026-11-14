@@ -857,10 +857,8 @@ function ThreadRowComponent({
             data-sidebar-thread-project-name=""
             title={`Project: ${projectName}`}
             className={cn(
-              "pointer-events-none truncate rounded-sm bg-muted/50 px-1.5 py-0.5 text-2xs leading-none text-subtle-foreground",
-              isCompactViewport
-                ? "max-w-20 shrink-0"
-                : "min-w-5 max-w-24 shrink-[100]",
+              "pointer-events-none shrink-0 truncate rounded-sm bg-muted/50 px-1.5 py-0.5 text-2xs leading-none text-subtle-foreground",
+              isCompactViewport ? "max-w-20" : "max-w-24",
             )}
           >
             {projectName}
