@@ -14,12 +14,13 @@ BB 插件集合：团队身份、会话书签、ACP 图标，以及从个人 BB 
 | `machine-gateway`   | `machine-gateway`    | 自托管 HTTPS 机器入口、独立凭据与撤销            |
 | `composer-tools`    | `composer-tools`     | 移动端逐段删除引用与当前草稿清空                  |
 | `file-download`     | `file-download`      | 将 HTML 等本地文件原始字节下载到浏览器设备；入口与限制见[插件说明](plugins/file-download/README.md) |
+| `todo`              | `todo`               | 宏观待办、关联会话与会话胶囊；分级自治的 Agent 建议卡片见[插件说明](plugins/todo/README.md) |
 
 ## 安装
 
 需要包含配套公共扩展的 BB fork。集合验证 runtime 固定为 `fork-v0.47.0-20261029.1`，source `1e9a1a3fb9c025922d144e04e110b668064ea07e`；相同 SDK 版本号不代表上游 npm 包包含这些接口。
 
-`file-download` 使用同 release 的 SDK 0.6.75；其他插件保留各自已锁定的 SDK。标准集合 CI/runner 包含新插件，已完成全成员真实冷安装、检查、构建与隔离迁移验证；目标实例安装和真实浏览器下载尚未验收。
+`file-download` 与 `todo` 使用同 release 的 SDK 0.6.75；其他插件保留各自已锁定的 SDK。标准集合 CI/runner 包含新插件，已完成全成员真实冷安装、检查、构建与隔离迁移验证；目标实例安装和真实浏览器下载尚未验收。
 
 ```sh
 bb plugin install git:https://github.com/hxy91819/bb-plugins.git@main --plugin bookmarks
