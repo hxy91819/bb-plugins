@@ -120,6 +120,7 @@ test("standard collection runner cold CI, types, tests and builds include every 
     "machine-gateway",
     "composer-tools",
     "thread-search",
+    "todo",
   ])
     assert.ok(
       collection.plugins.some((plugin) => plugin.name === name),
@@ -163,7 +164,8 @@ test("a member failure fails the collection without dropping subsequent members"
     assert.equal(result.status, 1);
     assert.match(result.stderr, /team: typecheck exited 7/);
     assert.equal(rows.length, collection.plugins.length);
-    assert.ok(rows.at(-1).cwd.endsWith("/plugins/file-download"));
+    const last = collection.plugins.at(-1).source.replace(/^\.\//, "");
+    assert.ok(rows.at(-1).cwd.endsWith(`/${last}`));
   });
 });
 
