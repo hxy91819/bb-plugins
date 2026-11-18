@@ -956,114 +956,113 @@ function TodoDetails({
         }
       }}
     >
-      <div className="mb-2 flex items-center gap-2 text-[11px] text-muted-foreground">
-        <span className="rounded-full bg-muted px-1.5 py-0.5 font-medium tabular-nums text-foreground">
-          {item.id}
-        </span>
-        <span>详情</span>
-      </div>
-      {item.threads.length > 0 ? (
-        <div className="mb-3 space-y-1">
-          <h3 className="text-[11px] font-medium text-muted-foreground">关联会话</h3>
-          <ThreadCapsules threads={item.threads} />
-        </div>
-      ) : null}
-      <div className="grid gap-2 md:grid-cols-2">
-        <label className="space-y-1 md:col-span-2">
-          <span className="text-[11px] text-muted-foreground">标题</span>
-          <input
-            aria-label={`标题 ${item.id}`}
-            value={title}
-            maxLength={500}
-            onChange={(event) => setTitle(event.target.value)}
-            className={fieldClassName}
-          />
-        </label>
-        <label className="space-y-1">
-          <span className="text-[11px] text-muted-foreground">分组</span>
-          <select
-            aria-label={`分组 ${item.id}`}
-            value={bucket}
-            onChange={(event) => setBucket(event.target.value as TodoFormalBucket)}
-            className={`${fieldClassName} cursor-pointer`}
-          >
-            {FORMAL_BUCKETS.map((value) => (
-              <option key={value} value={value}>
-                {BUCKET_LABEL[value]} · {BUCKET_CAPTION[value]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="space-y-1">
-          <span className="text-[11px] text-muted-foreground">项目列表</span>
-          <input
-            aria-label={`项目列表 ${item.id}`}
-            value={listName}
-            maxLength={80}
-            list="todo-list-names"
-            placeholder="例如 LightSpace"
-            onChange={(event) => setListName(event.target.value)}
-            className={fieldClassName}
-          />
-        </label>
-        <label className="space-y-1 md:col-span-2">
-          <span className="text-[11px] text-muted-foreground">子分组（Section）</span>
-          <input
-            aria-label={`分组（Section） ${item.id}`}
-            value={sectionName}
-            maxLength={80}
-            placeholder="列表内的子分组"
-            onChange={(event) => setSectionName(event.target.value)}
-            className={fieldClassName}
-          />
-        </label>
-        <label className="space-y-1 md:col-span-2">
-          <span className="text-[11px] text-muted-foreground">备注</span>
-          <textarea
-            aria-label={`备注 ${item.id}`}
-            value={notes}
-            rows={4}
-            maxLength={20000}
-            placeholder="补充背景、验收要点或链接"
-            onChange={(event) => setNotes(event.target.value)}
-            className={`${fieldClassName} resize-y`}
-          />
-        </label>
-      </div>
-      <datalist id="todo-list-names">
-        {listNames.map((name) => (
-          <option key={name} value={name} />
-        ))}
-      </datalist>
+      <textarea
+        aria-label={`备注 ${item.id}`}
+        value={notes}
+        rows={3}
+        maxLength={20000}
+        placeholder="添加备注"
+        onChange={(event) => setNotes(event.target.value)}
+        className="block max-h-80 min-h-10 w-full resize-y rounded-md border-0 bg-transparent px-1 py-1 text-base leading-relaxed text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [field-sizing:content] sm:text-sm"
+      />
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <button type="button" disabled={saving || !dirty} onClick={() => void save()} className={primaryButtonClassName}>
           {saving ? "保存中…" : "保存"}
         </button>
-        <span className="text-[11px] text-muted-foreground">{saved && !dirty ? "已保存" : "⌘/Ctrl + Enter 保存"}</span>
+        <span className="text-xs text-muted-foreground">{saved && !dirty ? "已保存" : "⌘/Ctrl + Enter 保存"}</span>
         <StartSessionButton item={item} onError={onError} variant="label" />
-        <span className="flex-1" />
-        <button
-          type="button"
-          disabled={saving || removing}
-          onClick={() => void remove()}
-          aria-label={`删除 ${item.id}`}
-          className="touch-manipulation cursor-pointer rounded-md px-2 py-1 text-xs text-destructive transition-colors hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
-        >
-          删除
-        </button>
       </div>
-      <div className="mt-3 space-y-2">
-        <h3 className="text-[11px] font-medium text-muted-foreground">进展日志</h3>
-        {item.logs.length === 0 ? (
-          <p className="text-xs text-muted-foreground">Agent 还没有留下日志。</p>
-        ) : (
-          <ul className="max-h-52 space-y-2 overflow-y-auto pr-1">
-            {item.logs.map((log) => (
-              <LogEntry key={log.id} log={log} />
+      <details className="mt-3 border-t border-border pt-1">
+        <summary className="cursor-pointer rounded-sm py-1 text-xs text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          更多详情 <span className="ml-1 tabular-nums">{item.id}</span>
+        </summary>
+        <div className="pt-2">
+          <div className="grid gap-2 md:grid-cols-2">
+            <label className="space-y-1 md:col-span-2">
+              <span className="text-xs text-muted-foreground">标题</span>
+              <input
+                aria-label={`标题 ${item.id}`}
+                value={title}
+                maxLength={500}
+                onChange={(event) => setTitle(event.target.value)}
+                className={fieldClassName}
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-xs text-muted-foreground">分组</span>
+              <select
+                aria-label={`分组 ${item.id}`}
+                value={bucket}
+                onChange={(event) => setBucket(event.target.value as TodoFormalBucket)}
+                className={`${fieldClassName} cursor-pointer`}
+              >
+                {FORMAL_BUCKETS.map((value) => (
+                  <option key={value} value={value}>
+                    {BUCKET_LABEL[value]} · {BUCKET_CAPTION[value]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="text-xs text-muted-foreground">项目列表</span>
+              <input
+                aria-label={`项目列表 ${item.id}`}
+                value={listName}
+                maxLength={80}
+                list="todo-list-names"
+                placeholder="例如 LightSpace"
+                onChange={(event) => setListName(event.target.value)}
+                className={fieldClassName}
+              />
+            </label>
+            <label className="space-y-1 md:col-span-2">
+              <span className="text-xs text-muted-foreground">子分组（Section）</span>
+              <input
+                aria-label={`分组（Section） ${item.id}`}
+                value={sectionName}
+                maxLength={80}
+                placeholder="列表内的子分组"
+                onChange={(event) => setSectionName(event.target.value)}
+                className={fieldClassName}
+              />
+            </label>
+          </div>
+          <datalist id="todo-list-names">
+            {listNames.map((name) => (
+              <option key={name} value={name} />
             ))}
-          </ul>
-        )}
-      </div>
+          </datalist>
+          {item.threads.length > 0 ? (
+            <div className="mt-3 space-y-1">
+              <h3 className="text-xs font-medium text-muted-foreground">关联会话</h3>
+              <ThreadCapsules threads={item.threads} />
+            </div>
+          ) : null}
+          <div className="mt-3 space-y-2">
+            <h3 className="text-xs font-medium text-muted-foreground">进展日志</h3>
+            {item.logs.length === 0 ? (
+              <p className="text-xs text-muted-foreground">Agent 还没有留下日志。</p>
+            ) : (
+              <ul className="max-h-52 space-y-2 overflow-y-auto pr-1">
+                {item.logs.map((log) => (
+                  <LogEntry key={log.id} log={log} />
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="mt-2 flex justify-end">
+            <button
+              type="button"
+              disabled={saving || removing}
+              onClick={() => void remove()}
+              aria-label={`删除 ${item.id}`}
+              className="touch-manipulation cursor-pointer rounded-md px-2 py-1 text-xs text-destructive transition-colors hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+            >
+              删除
+            </button>
+          </div>
+        </div>
+      </details>
     </div>
   );
 }
@@ -1210,8 +1209,8 @@ function TodoRow({
     >
       <div
         onClick={onSurfaceClick}
-        className={`group flex items-start gap-2.5 px-2.5 py-2.5 transition-colors sm:px-3.5 ${
-          expanded ? "bg-muted" : "hover:bg-accent"
+        className={`group flex items-start gap-2.5 px-2.5 pt-2.5 transition-colors sm:px-3.5 ${
+          expanded ? "bg-card" : "pb-2.5 hover:bg-accent"
         }`}
       >
         <button
@@ -1292,6 +1291,11 @@ function TodoRow({
               </span>
             ) : null}
           </div>
+          {!expanded && item.notes.trim() ? (
+            <p className="line-clamp-2 whitespace-pre-line break-words text-sm leading-5 text-muted-foreground">
+              {item.notes}
+            </p>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-0.5" data-todo-rail>
           <ThreadCountBadge item={item} onShowThreads={onShowThreads} />
@@ -1314,7 +1318,7 @@ function TodoRow({
         </div>
       </div>
       {expanded ? (
-        <div id={detailsId} className="border-t border-border bg-card px-2.5 py-3 sm:px-3.5">
+        <div id={detailsId} className="bg-card pb-2 pl-10 pr-2.5 sm:pl-11 sm:pr-3.5">
           <TodoDetails
             item={item}
             listNames={listNames}

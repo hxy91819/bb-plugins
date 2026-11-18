@@ -115,16 +115,16 @@ repeats the page title.
   and coming back keeps the same view. A persisted filter whose list no longer
   exists in the snapshot falls back to “全部” after the first load.
 - **Rows**: the round checkbox uses the list color. The collapsed row is one
-  clean title with a fixed right rail (soft thread-count capsule, ghost
-  new-session icon, disclosure), with no repeated id or next-step line. Clicking
+  title followed by up to two lines of notes, with a fixed right rail for the
+  thread-count capsule, new-session icon, and disclosure. Clicking
   the title edits it in place in a borderless auto-growing textarea; Enter
   (outside an IME composition) or blur saves, Escape cancels, and an empty draft
   restores the original title. Only the disclosure chevron or the row's blank
   edge expands details; a title click always starts inline editing instead.
-  The `T-17` id appears in the row's hover title and in the expanded detail header.
-  Expanded rows edit the title, bucket, list, section, and notes, show the full
-  thread capsules, agent logs, delete, and the labeled new-session control. In
-  the flat “全部” view a soft list chip follows the title. Log thread ids
+  Expanded rows put the full editable notes immediately below the title.
+  “更多详情” contains the todo ID and opens the title, bucket, list, section,
+  linked thread capsules, progress logs, and delete action. In the flat
+  “全部” view a soft list chip follows the title. Log thread ids
   navigate to the linked BB thread. Unsaved edits in the open details stay put
   when a realtime refresh arrives; a clean form follows the server fields. Logs
   and thread capsules keep updating either way.

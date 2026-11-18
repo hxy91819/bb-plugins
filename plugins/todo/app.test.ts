@@ -516,6 +516,7 @@ test("会话胶囊与日志里的 threadId 都跳到对应 BB 会话", async () 
     });
 
     fireEvent.click(slot.getByRole("button", { name: "展开 T-1 详情" }));
+    fireEvent.click(slot.getByText("更多详情", { exact: false }));
     assert.ok(await slot.findByText("面板骨架已经落地"));
     fireEvent.click(slot.getByRole("button", { name: /打开进展会话/ }));
     assert.deepEqual(slot.inspection.navigateCalls.at(-1), {
@@ -533,8 +534,10 @@ test("行内详情保存标题、备注与分组，并可删除条目", async ()
   const slot = await mountedPanel(store);
   try {
     await slot.findByText("写前端");
+    assert.ok(slot.getByText("旧备注"));
     fireEvent.click(slot.getByRole("button", { name: "展开 T-1 详情" }));
-    assert.equal(slot.queryByLabelText("下一步 T-1"), null);
+    assert.equal((slot.getByRole("textbox", { name: "备注 T-1" }) as HTMLTextAreaElement).value, "旧备注");
+    fireEvent.click(slot.getByText("更多详情", { exact: false }));
     fireEvent.change(slot.getByLabelText("标题 T-1"), { target: { value: "写清亮前端" } });
     fireEvent.change(slot.getByLabelText("分组 T-1"), { target: { value: "waiting" } });
     fireEvent.change(slot.getByLabelText("备注 T-1"), { target: { value: "保持安静" } });
@@ -555,6 +558,10 @@ test("行内详情保存标题、备注与分组，并可删除条目", async ()
     );
     await slot.findByRole("heading", { name: "Waiting" });
     assert.ok(slot.getByText("写清亮前端"));
+    const expand = slot.queryByRole("button", { name: "展开 T-1 详情" });
+    if (expand) fireEvent.click(expand);
+    const more = slot.getByText("更多详情", { exact: false });
+    if (!more.closest("details")?.open) fireEvent.click(more);
 
     fireEvent.click(slot.getByRole("button", { name: "删除 T-1" }));
     await waitFor(() => {
@@ -882,6 +889,7 @@ test("折叠行是干净的三段式：标题只在主列，编号留在悬停 t
     fireEvent.click(within(row as HTMLElement).getByRole("button", { name: "展开 T-1 详情" }));
     assert.ok(await slot.findByText("T-1"));
     assert.equal(slot.queryByLabelText("下一步 T-1"), null);
+    fireEvent.click(slot.getByText("更多详情", { exact: false }));
     assert.ok(await slot.findByRole("button", { name: "打开会话 会话甲" }));
     assert.ok(slot.getByRole("button", { name: "打开会话 会话乙" }));
 
@@ -1052,6 +1060,7 @@ test("展开中的未修改详情跟随行内标题保存", async () => {
   try {
     await slot.findByText("旧标题");
     fireEvent.click(slot.getByRole("button", { name: "展开 T-1 详情" }));
+    fireEvent.click(slot.getByText("更多详情", { exact: false }));
     const detailTitle = () => slot.getByLabelText("标题 T-1") as HTMLInputElement;
     await slot.findByLabelText("标题 T-1");
 
