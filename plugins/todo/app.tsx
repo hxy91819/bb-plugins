@@ -963,7 +963,7 @@ function TodoDetails({
         maxLength={20000}
         placeholder="添加备注"
         onChange={(event) => setNotes(event.target.value)}
-        className="block max-h-80 min-h-10 w-full resize-y rounded-md border-0 bg-transparent px-1 py-1 text-base leading-relaxed text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [field-sizing:content] sm:text-sm"
+        className="block max-h-[65dvh] min-h-10 w-full resize-y rounded-md border-0 bg-transparent px-1 py-1 text-base leading-relaxed text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [field-sizing:content] sm:text-sm"
       />
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <button type="button" disabled={saving || !dirty} onClick={() => void save()} className={primaryButtonClassName}>
