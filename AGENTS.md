@@ -15,4 +15,5 @@ Keep imported license notices and the original source evidence in `migration-ori
 - 整项任务完成必要验证和适用的 review 后，统一提交本任务文件，推送到个人远端 `origin` 并核对远端 SHA；这是持续授权，无需再次确认。中间可保存检查点提交，发布统一放在最终交付阶段。
 - 本集合通过 `main` 的 `.bb/plugins.json` 以 Git collection 分发。产品改动须进入并推送 `main`，跟踪该 SHA 的 `.github/workflows/ci.yml` 到成功，再交付 commit 与安装引用；只推开发分支或启动 CI 不算发布完成。已有相同 SHA 的成功流水线时复用，不重复触发。
 - 纯规则或文档改动同样提交、推送并核对必要 CI，沿用 Git 分发，不为其另建运行包或 npm 发布。用户明确要求仅验证、不推送或不发布时按其要求执行；实际受阻时报告未完成步骤。
+- 对于插件类的修改，完成验证、构建、提交并推送到 `origin` 后，直接安装/重载到当前 BB 实例使其生效（`path:` 来源且代码有变化时执行 `bb plugin reload <id> --json`；`git:`/`npm:` 来源时执行 `bb plugin update <id> --yes`），无需另行确认，并核验插件运行状态为 `running`、无报错；如涉及需确认的运行中会话（如 `acp-extensions` 有活跃 ACP 会话）或需重启宿主服务，仍按对应规则先确认再执行。
 - 发布代码与安装到目标实例分别核验；本次任务已有安装、迁移或服务操作授权时继续执行，不因推送而新增服务替换授权。
