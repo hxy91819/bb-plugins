@@ -199,6 +199,7 @@ type CreateTodoInput = {
   threadId?: string;
   listName?: string;
   sectionName?: string;
+  afterId?: string;
 };
 
 type UpdateTodoValues = {
@@ -1067,6 +1068,38 @@ export default function plugin(bb: BbPluginApi): void {
     );
   };
 
+  const resolveInsertSortOrder = (bucket: TodoBucket, afterId?: string): number => {
+    if (bucket === "inbox") return 0;
+    const openRows = db
+      .prepare(
+        `SELECT seq, sort_order FROM todo_items
+         WHERE completed_at IS NULL AND bucket = ? AND ${activeSql}
+         ORDER BY sort_order ASC, seq ASC`,
+      )
+      .all(bucket) as Array<{ seq: number; sort_order: number }>;
+
+    if (openRows.length === 0) return 0;
+
+    if (afterId !== undefined) {
+      const afterSeq = parseTodoId(afterId);
+      const index = afterSeq === null ? -1 : openRows.findIndex((row) => row.seq === afterSeq);
+      if (index !== -1) {
+        const current = openRows[index]!;
+        const next = openRows[index + 1];
+        if (!next) return current.sort_order + 1;
+        const mid = (current.sort_order + next.sort_order) / 2;
+        if (mid > current.sort_order && mid < next.sort_order) return mid;
+        const updateStmt = db.prepare("UPDATE todo_items SET sort_order = ? WHERE seq = ?");
+        for (let i = 0; i < openRows.length; i++) {
+          updateStmt.run(i + 1, openRows[i]!.seq);
+        }
+        return index + 1 + 0.5;
+      }
+    }
+
+    return openRows[openRows.length - 1]!.sort_order + 1;
+  };
+
   const createTodo = async (input: CreateTodoInput, actor: string): Promise<TodoItem> => {
     const placement = resolveTodoPlacement(input.title, {
       listName: input.listName,
@@ -1077,17 +1110,19 @@ export default function plugin(bb: BbPluginApi): void {
     }
     const timestamp = now();
     const seq = db.transaction(() => {
+      const sortOrder = resolveInsertSortOrder(input.bucket, input.afterId);
       const result = db
         .prepare(
           `INSERT INTO todo_items
             (title, bucket, notes, proposal_reason, completed_at, sort_order, created_at, updated_at, list_name, section_name)
-           VALUES (?, ?, ?, ?, NULL, 0, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)`,
         )
         .run(
           placement.title,
           input.bucket,
           input.notes,
           input.proposalReason ?? null,
+          sortOrder,
           timestamp,
           timestamp,
           placement.listName,
@@ -2198,6 +2233,7 @@ export default function plugin(bb: BbPluginApi): void {
           notes: "",
           listName: input.listName,
           sectionName: input.sectionName,
+          afterId: input.afterId,
         },
         "ui",
       ),

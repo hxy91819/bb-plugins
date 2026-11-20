@@ -1428,6 +1428,49 @@ test("suggestions dedupe, apply through revisions, and undo restores the todo", 
   }
 });
 
+test("quickAdd afterId inserts immediately after target row and rebalances ties", async () => {
+  const { bb, harness } = fixture();
+  try {
+    await plugin(bb);
+    const first = (await harness.behavior.callRpc("quickAdd", {
+      title: "First",
+      bucket: "focus",
+    })) as TodoItem;
+    const second = (await harness.behavior.callRpc("quickAdd", {
+      title: "Second",
+      bucket: "focus",
+    })) as TodoItem;
+    const third = (await harness.behavior.callRpc("quickAdd", {
+      title: "Third",
+      bucket: "focus",
+    })) as TodoItem;
+
+    const mid1 = (await harness.behavior.callRpc("quickAdd", {
+      title: "After First",
+      bucket: "focus",
+      afterId: first.id,
+    })) as TodoItem;
+    const mid2 = (await harness.behavior.callRpc("quickAdd", {
+      title: "After Mid1",
+      bucket: "focus",
+      afterId: mid1.id,
+    })) as TodoItem;
+    const tail = (await harness.behavior.callRpc("quickAdd", {
+      title: "At Bottom",
+      bucket: "focus",
+      afterId: third.id,
+    })) as TodoItem;
+
+    const snapshot = (await harness.behavior.callRpc("listSnapshot", {})) as TodoSnapshot;
+    assert.deepEqual(
+      snapshot.buckets.focus.map((item) => item.id),
+      [first.id, mid1.id, mid2.id, second.id, third.id, tail.id],
+    );
+  } finally {
+    await harness.lifecycle.dispose();
+  }
+});
+
 test("package imports only public SDK surfaces", async () => {
   const result = await experimental_scanPublicSdkOnly(process.cwd(), {
     // Frontend test-only tooling; production code keeps the server surface free

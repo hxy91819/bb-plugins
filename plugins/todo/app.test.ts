@@ -138,13 +138,44 @@ function handlers(store: Store) {
       if (store.failSnapshot) throw new Error("snapshot unavailable");
       return store.snapshot();
     },
-    quickAdd: (input: { title: string; bucket?: TodoFormalBucket; listName?: string; sectionName?: string }) =>
-      store.add({
+    quickAdd: (input: {
+      title: string;
+      bucket?: TodoFormalBucket;
+      listName?: string;
+      sectionName?: string;
+      afterId?: string;
+    }) => {
+      const bucketName = input.bucket ?? "focus";
+      const openInBucket = store.items
+        .filter((item) => item.completedAt === null && item.deletedAt === null && item.bucket === bucketName)
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.seq - b.seq);
+      let sortOrder = openInBucket.length === 0 ? 0 : openInBucket[openInBucket.length - 1]!.sortOrder + 1;
+      if (input.afterId !== undefined) {
+        const idx = openInBucket.findIndex((item) => item.id === input.afterId);
+        if (idx !== -1) {
+          const current = openInBucket[idx]!;
+          const next = openInBucket[idx + 1];
+          if (!next) {
+            sortOrder = current.sortOrder + 1;
+          } else {
+            const mid = (current.sortOrder + next.sortOrder) / 2;
+            if (mid > current.sortOrder && mid < next.sortOrder) {
+              sortOrder = mid;
+            } else {
+              for (let i = 0; i < openInBucket.length; i++) openInBucket[i]!.sortOrder = i + 1;
+              sortOrder = idx + 1 + 0.5;
+            }
+          }
+        }
+      }
+      return store.add({
         title: input.title,
-        bucket: input.bucket ?? "focus",
+        bucket: bucketName,
         listName: input.listName ?? "",
         sectionName: input.sectionName ?? "",
-      }),
+        sortOrder,
+      });
+    },
     update: (input: {
       id: string;
       title?: string;
@@ -1160,6 +1191,86 @@ test("Agent 建议卡片展示依据和证据会话，采纳与忽略分别确�
     // React 19 may defer passive effects. Flush them before the file teardown
     // drops the JSDOM window.
     await new Promise((resolve) => setTimeout(resolve, 0));
+  } finally {
+    slot.lifecycle.unmount();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+});
+
+test("在任意行按 Enter 可在其下方原地插入新待办，底部虚线行也可直接插入", async () => {
+  const store = new Store();
+  store.add({ title: "Context - 知识库", listName: "AI 基建", sectionName: "核心" });
+  store.add({ title: "skills 数据监测", listName: "AI 基建", sectionName: "核心" });
+  const slot = await mountedPanel(store);
+  try {
+    await slot.findByText("Context - 知识库");
+    // Click first row's title and press Enter to open inline insert right below it.
+    fireEvent.click(slot.getByText("Context - 知识库"));
+    const titleEditor = (await slot.findByLabelText("编辑标题 T-1")) as HTMLTextAreaElement;
+    fireEvent.keyDown(titleEditor, { key: "Enter" });
+
+    const inlineInput = (await slot.findByLabelText("插入新待办")) as HTMLTextAreaElement;
+    // IME composition Enter must not submit.
+    fireEvent.compositionStart(inlineInput);
+    fireEvent.change(inlineInput, { target: { value: "输入法候选" } });
+    fireEvent.keyDown(inlineInput, { key: "Enter", isComposing: true });
+    assert.equal(slot.inspection.rpcCalls.filter((call) => call.method === "quickAdd").length, 0);
+    fireEvent.compositionEnd(inlineInput);
+
+    fireEvent.change(inlineInput, { target: { value: "Context-Graphify 评测" } });
+    fireEvent.keyDown(inlineInput, { key: "Enter" });
+    await waitFor(() =>
+      assert.deepEqual(slot.inspection.rpcCalls.find((call) => call.method === "quickAdd"), {
+        method: "quickAdd",
+        input: {
+          title: "Context-Graphify 评测",
+          bucket: "focus",
+          listName: "AI 基建",
+          sectionName: "核心",
+          afterId: "T-1",
+        },
+      }),
+    );
+    await slot.findByText("Context-Graphify 评测");
+
+    // Inline draft stays open for rapid consecutive entry; Escape closes it.
+    const nextInlineInput = (await slot.findByLabelText("插入新待办")) as HTMLTextAreaElement;
+    fireEvent.keyDown(nextInlineInput, { key: "Escape" });
+    await waitFor(() => {
+      assert.equal(slot.queryByLabelText("插入新待办"), null);
+    });
+
+    // Bottom dashed-circle placeholder inserts at the bottom of the section.
+    const bottomButtons = slot.getAllByRole("button", { name: "在底部添加待办" });
+    fireEvent.click(bottomButtons[0]!);
+    const bottomInput = (await slot.findByLabelText("插入新待办")) as HTMLTextAreaElement;
+    fireEvent.change(bottomInput, { target: { value: "知识库集成" } });
+    fireEvent.keyDown(bottomInput, { key: "Enter" });
+    await waitFor(() =>
+      assert.deepEqual(slot.inspection.rpcCalls.filter((call) => call.method === "quickAdd").at(-1), {
+        method: "quickAdd",
+        input: {
+          title: "知识库集成",
+          bucket: "focus",
+          listName: "AI 基建",
+          sectionName: "核心",
+          afterId: "T-2",
+        },
+      }),
+    );
+    await slot.findByText("知识库集成");
+
+    // Verify rendered order in the DOM: T-1, Context-Graphify 评测, skills 数据监测, 知识库集成.
+    const titles = Array.from(
+      slot.container.querySelectorAll("[data-todo-title]"),
+      (el) => el.textContent,
+    );
+    assert.deepEqual(titles, [
+      "Context - 知识库",
+      "Context-Graphify 评测",
+      "skills 数据监测",
+      "知识库集成",
+    ]);
   } finally {
     slot.lifecycle.unmount();
     await new Promise((resolve) => setTimeout(resolve, 0));

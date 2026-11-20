@@ -248,6 +248,7 @@ export const quickAddInput = z.object({
   bucket: todoFormalBucketSchema.default("focus"),
   listName: todoListNameSchema.optional(),
   sectionName: todoSectionNameSchema.optional(),
+  afterId: todoIdSchema.optional(),
 });
 
 export const updateTodoInput = z.object({

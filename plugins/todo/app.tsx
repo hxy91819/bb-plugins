@@ -1076,6 +1076,7 @@ function TodoRow({
   divider,
   onToggle,
   onShowThreads,
+  onInsertAfter,
   onChanged,
   onError,
 }: {
@@ -1087,6 +1088,7 @@ function TodoRow({
   divider: boolean;
   onToggle(): void;
   onShowThreads(): void;
+  onInsertAfter(): void;
   onChanged(): void;
   onError(message: string): void;
 }) {
@@ -1178,6 +1180,7 @@ function TodoRow({
     if (event.key !== "Enter" || event.shiftKey) return;
     event.preventDefault();
     commitTitle();
+    onInsertAfter();
   };
 
   const toggleCompleted = async () => {
@@ -1378,6 +1381,188 @@ function SectionHeading({
   );
 }
 
+type InlineInsertTarget =
+  | {
+      kind: "after";
+      afterId: string;
+      bucket: TodoFormalBucket;
+      listName: string;
+      sectionName: string;
+    }
+  | {
+      kind: "bottom";
+      key: string;
+      afterId?: string;
+      bucket: TodoFormalBucket;
+      listName: string;
+      sectionName: string;
+    };
+
+function BottomInsertRow({
+  divider,
+  label,
+  onActivate,
+}: {
+  divider: boolean;
+  label: string;
+  onActivate(): void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onActivate}
+      className={`group flex w-full touch-manipulation cursor-text appearance-none items-center gap-2.5 bg-transparent px-2.5 py-2.5 text-left transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-3.5 ${
+        divider ? "border-t border-border" : ""
+      }`}
+    >
+      <span
+        aria-hidden="true"
+        className="h-5 w-5 shrink-0 rounded-full border border-dashed border-muted-foreground/50 transition-colors group-hover:border-muted-foreground"
+      />
+      <span className="text-sm leading-5 text-muted-foreground/60 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+        新建待办
+      </span>
+    </button>
+  );
+}
+
+function InlineTodoDraftRow({
+  bucket,
+  listName,
+  sectionName,
+  afterId,
+  color,
+  divider,
+  onSubmitted,
+  onCancel,
+  onError,
+}: {
+  bucket: TodoFormalBucket;
+  listName: string;
+  sectionName: string;
+  afterId?: string;
+  color: TodoColor | null;
+  divider: boolean;
+  onSubmitted(created: TodoItem): void;
+  onCancel(): void;
+  onError(message: string): void;
+}) {
+  const rpc = useRpc<typeof rpcContract>();
+  const [draft, setDraft] = useState("");
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const composing = useRef(false);
+  const settled = useRef(false);
+  const submitting = useRef(false);
+
+  const resize = () => {
+    const element = inputRef.current;
+    if (!element) return;
+    element.style.height = "auto";
+    const nextHeight = element.scrollHeight;
+    element.style.height = nextHeight > 0 ? `${nextHeight}px` : "";
+  };
+
+  useEffect(() => {
+    settled.current = false;
+    const element = inputRef.current;
+    if (!element) return;
+    element.focus();
+    resize();
+  }, [afterId]);
+
+  useEffect(() => {
+    resize();
+  }, [draft]);
+
+  const submit = async (keepOpen: boolean) => {
+    const trimmed = draft.trim();
+    if (trimmed.length === 0) {
+      settled.current = true;
+      onCancel();
+      return;
+    }
+    if (submitting.current) return;
+    submitting.current = true;
+    const typedPrefix = parseTitlePrefix(trimmed);
+    try {
+      const created = await rpc.call("quickAdd", {
+        title: trimmed,
+        bucket,
+        ...(listName && !typedPrefix?.listName ? { listName } : {}),
+        ...(sectionName && !typedPrefix?.listName ? { sectionName } : {}),
+        ...(afterId ? { afterId } : {}),
+      });
+      setDraft("");
+      onSubmitted(created);
+      if (!keepOpen) {
+        settled.current = true;
+        onCancel();
+      } else {
+        inputRef.current?.focus();
+      }
+    } catch {
+      onError("没能添加这条待办，请再试一次。");
+    } finally {
+      submitting.current = false;
+    }
+  };
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (composing.current || event.nativeEvent.isComposing) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      settled.current = true;
+      onCancel();
+      return;
+    }
+    if (event.key !== "Enter" || event.shiftKey) return;
+    event.preventDefault();
+    void submit(true);
+  };
+
+  return (
+    <div
+      data-todo-inline-draft
+      className={`flex items-start gap-2.5 bg-card px-2.5 py-2.5 sm:px-3.5 ${
+        divider ? "border-t border-border" : ""
+      }`}
+    >
+      <span
+        aria-hidden="true"
+        style={checkStyle(color, false)}
+        className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
+          color ? "" : "border-muted-foreground"
+        }`}
+      />
+      <div className="min-w-0 flex-1">
+        <textarea
+          ref={inputRef}
+          aria-label="插入新待办"
+          placeholder="新待办"
+          rows={1}
+          value={draft}
+          maxLength={500}
+          onChange={(event) => setDraft(event.target.value)}
+          onCompositionStart={() => {
+            composing.current = true;
+          }}
+          onCompositionEnd={() => {
+            composing.current = false;
+          }}
+          onKeyDown={onKeyDown}
+          onBlur={() => {
+            if (settled.current || submitting.current) return;
+            void submit(false);
+          }}
+          className="block min-w-0 w-full resize-none overflow-hidden rounded-none border-0 bg-transparent p-0 text-base font-medium leading-5 text-foreground outline-none placeholder:text-muted-foreground/60 sm:text-sm"
+        />
+      </div>
+    </div>
+  );
+}
+
 function TodoSection({
   bucket,
   items,
@@ -1387,9 +1572,14 @@ function TodoSection({
   collapsedSections,
   suggestedItemIds,
   expandedId,
+  inlineInsert,
   onToggleSection,
   onToggle,
   onShowThreads,
+  onStartInlineAfter,
+  onStartInlineBottom,
+  onInlineSubmitted,
+  onInlineCancel,
   onChanged,
   onError,
 }: {
@@ -1401,9 +1591,20 @@ function TodoSection({
   collapsedSections: ReadonlySet<string>;
   suggestedItemIds: ReadonlySet<string>;
   expandedId: string | null;
+  inlineInsert: InlineInsertTarget | null;
   onToggleSection(key: string): void;
   onToggle(id: string): void;
   onShowThreads(id: string): void;
+  onStartInlineAfter(item: TodoItem): void;
+  onStartInlineBottom(
+    key: string,
+    bucket: TodoFormalBucket,
+    listName: string,
+    sectionName: string,
+    afterId?: string,
+  ): void;
+  onInlineSubmitted(created: TodoItem): void;
+  onInlineCancel(): void;
   onChanged(): void;
   onError(message: string): void;
 }) {
@@ -1417,8 +1618,26 @@ function TodoSection({
     ? [...new Set(visible.map((item) => item.listName))]
     : [listFilter ?? ""];
 
+  const renderInlineAfter = (item: TodoItem) => {
+    if (inlineInsert?.kind !== "after" || inlineInsert.afterId !== item.id) return null;
+    return (
+      <InlineTodoDraftRow
+        key={`after-${item.id}`}
+        bucket={inlineInsert.bucket}
+        listName={inlineInsert.listName}
+        sectionName={inlineInsert.sectionName}
+        afterId={inlineInsert.afterId}
+        color={colorOf(lists, inlineInsert.listName)}
+        divider
+        onSubmitted={onInlineSubmitted}
+        onCancel={onInlineCancel}
+        onError={onError}
+      />
+    );
+  };
+
   const renderRows = (rows: TodoItem[], offset: number) =>
-    rows.map((item, index) => (
+    rows.flatMap((item, index) => [
       <TodoRow
         key={item.id}
         item={item}
@@ -1429,10 +1648,46 @@ function TodoSection({
         expanded={expandedId === item.id}
         onToggle={() => onToggle(item.id)}
         onShowThreads={() => onShowThreads(item.id)}
+        onInsertAfter={() => onStartInlineAfter(item)}
         onChanged={onChanged}
         onError={onError}
+      />,
+      renderInlineAfter(item),
+    ]);
+
+  const renderBottomSlot = (
+    groupKey: string,
+    listName: string,
+    sectionName: string,
+    lastItem: TodoItem | undefined,
+    divider: boolean,
+  ) => {
+    const color = colorOf(lists, listName);
+    if (inlineInsert?.kind === "bottom" && inlineInsert.key === groupKey) {
+      return (
+        <InlineTodoDraftRow
+          key={groupKey}
+          bucket={inlineInsert.bucket}
+          listName={inlineInsert.listName}
+          sectionName={inlineInsert.sectionName}
+          afterId={inlineInsert.afterId}
+          color={color}
+          divider={divider}
+          onSubmitted={onInlineSubmitted}
+          onCancel={onInlineCancel}
+          onError={onError}
+        />
+      );
+    }
+    return (
+      <BottomInsertRow
+        key={`bottom-${groupKey}`}
+        divider={divider}
+        label="在底部添加待办"
+        onActivate={() => onStartInlineBottom(groupKey, bucket, listName, sectionName, lastItem?.id)}
       />
-    ));
+    );
+  };
 
   let rendered = 0;
   const body = grouped
@@ -1447,6 +1702,9 @@ function TodoSection({
           <div key={listName || "loose"}>
             {showListHeaders ? <ListHeading name={listName} color={color} /> : null}
             {renderRows(loose, looseStart)}
+            {loose.length > 0
+              ? renderBottomSlot(`${bucket}\0${listName}\0`, listName, "", loose[loose.length - 1], true)
+              : null}
             {sectionNames.map((sectionName) => {
               const key = `${listName}\0${sectionName}`;
               const rows = inList.filter((item) => item.sectionName === sectionName);
@@ -1462,14 +1720,28 @@ function TodoSection({
                     collapsed={collapsed}
                     onToggle={() => onToggleSection(key)}
                   />
-                  {collapsed ? null : renderRows(rows, start)}
+                  {collapsed ? null : (
+                    <>
+                      {renderRows(rows, start)}
+                      {renderBottomSlot(
+                        `${bucket}\0${listName}\0${sectionName}`,
+                        listName,
+                        sectionName,
+                        rows[rows.length - 1],
+                        true,
+                      )}
+                    </>
+                  )}
                 </div>
               );
             })}
           </div>
         );
       })
-    : renderRows(visible, 0);
+    : [
+        ...renderRows(visible, 0),
+        renderBottomSlot(`${bucket}\0\0`, "", "", visible[visible.length - 1], visible.length > 0),
+      ];
 
   return (
     <section aria-label={`${BUCKET_LABEL[bucket]} 待办`} className="space-y-2">
@@ -1878,6 +2150,7 @@ function TodoPanel(_props: PluginNavPanelProps) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [inlineInsert, setInlineInsert] = useState<InlineInsertTarget | null>(null);
   const initialViewState = useRef<TodoViewState | null>(null);
   if (initialViewState.current === null) initialViewState.current = readViewState();
   const initialView = initialViewState.current;
@@ -2051,6 +2324,7 @@ function TodoPanel(_props: PluginNavPanelProps) {
                     collapsedSections={collapsedSections}
                     suggestedItemIds={new Set(snapshot.suggestions.map((suggestion) => suggestion.itemId))}
                     expandedId={expandedId}
+                    inlineInsert={inlineInsert}
                     onToggleSection={(key) => {
                       setCollapsedSections((current) => {
                         const next = new Set(current);
@@ -2063,6 +2337,34 @@ function TodoPanel(_props: PluginNavPanelProps) {
                       setExpandedId((current) => (current === id ? null : id));
                     }}
                     onShowThreads={(id) => setExpandedId(id)}
+                    onStartInlineAfter={(item) => {
+                      if (item.bucket === "inbox") return;
+                      setInlineInsert({
+                        kind: "after",
+                        afterId: item.id,
+                        bucket: item.bucket,
+                        listName: item.listName,
+                        sectionName: item.sectionName,
+                      });
+                    }}
+                    onStartInlineBottom={(key, targetBucket, listName, sectionName, afterId) => {
+                      setInlineInsert({
+                        kind: "bottom",
+                        key,
+                        afterId,
+                        bucket: targetBucket,
+                        listName,
+                        sectionName,
+                      });
+                    }}
+                    onInlineSubmitted={(created) => {
+                      setInlineInsert((current) => {
+                        if (!current) return null;
+                        return { ...current, afterId: created.id };
+                      });
+                      refresh();
+                    }}
+                    onInlineCancel={() => setInlineInsert(null)}
                     onChanged={refresh}
                     onError={report}
                   />
