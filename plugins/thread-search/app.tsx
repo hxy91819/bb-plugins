@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   definePluginApp,
   useBbNavigate,
@@ -12,6 +6,7 @@ import {
   type PluginThreadPanelProps,
   type PluginThreadHeaderActionProps,
 } from "@get-bb/plugin-sdk/app";
+import { conversationHighlightStyle, highlightConversation } from "./conversation-highlights";
 import { pageSize, searchMessages, type SearchResult } from "./search";
 
 const controllers = new Map<
@@ -19,6 +14,10 @@ const controllers = new Map<
   { focus(): void; move(direction: number): void; visible(): boolean }
 >();
 const actionId = "find";
+const messageTime = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
 const buttonClass =
   "cursor-pointer rounded p-2 text-sm hover:bg-state-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50";
 
@@ -67,20 +66,13 @@ function SearchPanel({ threadId }: PluginThreadPanelProps) {
   const error = failure?.key === key ? failure.message : null;
   const loading = term.length > 0 && !data && !error;
   const total =
-    data?.total ??
-    (result?.threadId === threadId && result.term === term
-      ? result.data.total
-      : 0);
+    data?.total ?? (result?.threadId === threadId && result.term === term ? result.data.total : 0);
   const move = useCallback(
     (direction: number) => {
       if (total === 0) return;
       setNavigationRequest((value) => value + 1);
       setActive((current) =>
-        current < 0
-          ? direction > 0
-            ? 0
-            : total - 1
-          : (current + direction + total) % total,
+        current < 0 ? (direction > 0 ? 0 : total - 1) : (current + direction + total) % total,
       );
     },
     [total],
@@ -93,13 +85,17 @@ function SearchPanel({ threadId }: PluginThreadPanelProps) {
       element.getClientRects().length > 0
     );
   }, []);
+  useEffect(() => {
+    if (root.current && term) {
+      return highlightConversation(root.current, threadId, term, visible);
+    }
+  }, [threadId, term, visible]);
   const focusPending = useCallback(() => {
     if (!pendingFocus.current || !visible()) return;
     const field = input.current;
     field?.focus();
     field?.select();
-    pendingFocus.current =
-      field === null || field.ownerDocument.activeElement !== field;
+    pendingFocus.current = field === null || field.ownerDocument.activeElement !== field;
   }, [visible]);
   const focus = useCallback(() => {
     pendingFocus.current = true;
@@ -124,8 +120,7 @@ function SearchPanel({ threadId }: PluginThreadPanelProps) {
     const controller = { focus, move, visible };
     controllers.set(threadId, controller);
     return () => {
-      if (controllers.get(threadId) === controller)
-        controllers.delete(threadId);
+      if (controllers.get(threadId) === controller) controllers.delete(threadId);
     };
   }, [threadId, move, focus, visible]);
   useEffect(() => {
@@ -155,9 +150,7 @@ function SearchPanel({ threadId }: PluginThreadPanelProps) {
             setFailure({
               key,
               message:
-                error instanceof Error
-                  ? error.message
-                  : "Unable to search this conversation.",
+                error instanceof Error ? error.message : "Unable to search this conversation.",
             });
         },
       );
@@ -202,9 +195,7 @@ function SearchPanel({ threadId }: PluginThreadPanelProps) {
       setFailure({
         key,
         message:
-          error instanceof Error
-            ? error.message
-            : "Unable to close search. Please try again.",
+          error instanceof Error ? error.message : "Unable to close search. Please try again.",
       });
     } finally {
       setClosing(false);
@@ -227,6 +218,7 @@ function SearchPanel({ threadId }: PluginThreadPanelProps) {
         }
       }}
     >
+      <style>{conversationHighlightStyle}</style>
       <div className="flex items-center gap-1">
         <input
           ref={input}
@@ -252,11 +244,7 @@ function SearchPanel({ threadId }: PluginThreadPanelProps) {
         </button>
       </div>
       <div className="flex items-center gap-1 text-xs">
-        <span
-          className="mr-auto text-muted-foreground"
-          role="status"
-          aria-live="polite"
-        >
+        <span className="mr-auto text-muted-foreground" role="status" aria-live="polite">
           {loading
             ? "Searching…"
             : term && data
@@ -295,13 +283,8 @@ function SearchPanel({ threadId }: PluginThreadPanelProps) {
           {error}
         </p>
       )}
-      {data?.total === 0 && (
-        <p className="text-sm text-muted-foreground">No matching messages.</p>
-      )}
-      <ol
-        className="min-h-0 flex-1 space-y-2 overflow-y-auto"
-        aria-label="Matching messages"
-      >
+      {data?.total === 0 && <p className="text-sm text-muted-foreground">No matching messages.</p>}
+      <ol className="min-h-0 flex-1 space-y-2 overflow-y-auto" aria-label="Matching messages">
         {data?.matches.map((match, index) => (
           <li key={match.sourceSeq}>
             <button
@@ -312,8 +295,13 @@ function SearchPanel({ threadId }: PluginThreadPanelProps) {
                 setNavigationRequest((value) => value + 1);
               }}
             >
-              <span className="mb-1 block text-xs text-muted-foreground">
-                {match.sourceKind === "user_message" ? "You" : "Assistant"}
+              <span className="mb-1 flex flex-wrap items-baseline justify-between gap-x-2 text-xs text-muted-foreground">
+                <span>{match.sourceKind === "user_message" ? "You" : "Assistant"}</span>
+                {match.timestamp != null && (
+                  <time dateTime={new Date(match.timestamp).toISOString()}>
+                    {messageTime.format(match.timestamp)}
+                  </time>
+                )}
               </span>
               <span className="block whitespace-pre-wrap break-words text-sm">
                 {highlight(match)}
@@ -332,8 +320,7 @@ function SearchPanel({ threadId }: PluginThreadPanelProps) {
             Previous page
           </button>
           <span>
-            {offset + 1}–{Math.min(offset + pageSize, data.total)} of{" "}
-            {data.total}
+            {offset + 1}–{Math.min(offset + pageSize, data.total)} of {data.total}
           </span>
           <button
             className={buttonClass}
@@ -356,8 +343,7 @@ function HeaderAction({ threadId }: PluginThreadHeaderActionProps) {
       aria-label="Find in conversation"
       title="Find in conversation"
       onClick={() => {
-        if (navigate.openThreadPanel({ actionId }))
-          controllers.get(threadId)?.focus();
+        if (navigate.openThreadPanel({ actionId })) controllers.get(threadId)?.focus();
       }}
     >
       <svg
@@ -395,8 +381,7 @@ export default definePluginApp((app) => {
     defaultShortcut: { key: "f", mod: true, shift: true },
     isAvailable: ({ threadId }) => threadId !== null,
     run: ({ threadId, openPanel }) => {
-      if (threadId && openPanel({ actionId }))
-        controllers.get(threadId)?.focus();
+      if (threadId && openPanel({ actionId })) controllers.get(threadId)?.focus();
     },
   });
   for (const [id, direction, shift] of [

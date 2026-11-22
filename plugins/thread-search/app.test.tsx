@@ -1,22 +1,13 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import {
-  definePluginApp,
-  type PluginCommandRegistration,
-} from "@get-bb/plugin-sdk/app";
+import { definePluginApp, type PluginCommandRegistration } from "@get-bb/plugin-sdk/app";
 import { pageSize, searchMessages, type SearchInput } from "./search";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", {
   url: "http://localhost",
 });
-const keys = [
-  "window",
-  "document",
-  "HTMLElement",
-  "MutationObserver",
-  "navigator",
-] as const;
+const keys = ["window", "document", "HTMLElement", "MutationObserver", "navigator"] as const;
 const descriptors = keys.map(
   (key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
 );
@@ -25,8 +16,7 @@ for (const key of keys)
     configurable: true,
     value: dom.window[key],
   });
-const { loadPluginApp, renderSlot } =
-  await import("@get-bb/plugin-sdk/testing/app");
+const { loadPluginApp, renderSlot } = await import("@get-bb/plugin-sdk/testing/app");
 const { fireEvent, waitFor } = await import("@testing-library/react");
 const { default: app } = await import("./app");
 after(() => {
@@ -97,7 +87,10 @@ test("command and header open the same search, keyboard navigation crosses pages
                 total: 27,
                 matches: Array.from(
                   { length: Math.min(pageSize, 27 - input.offset) },
-                  (_, index) => match(input.offset + index + 1),
+                  (_, index) => ({
+                    ...match(27 - input.offset - index),
+                    timestamp: Date.UTC(2026, 10, 22, 10, 27 - input.offset - index),
+                  }),
                 ),
               };
             },
@@ -118,12 +111,22 @@ test("command and header open the same search, keyboard navigation crosses pages
     fireEvent.change(field, { target: { value: "needle" } });
     await slot.findByText("0 / 27 matching messages");
     assert.equal(slot.container.querySelector("mark")?.textContent, "needle");
+    const timestamp = Date.UTC(2026, 10, 22, 10, 27);
+    const time = slot.container.querySelector("time");
+    assert.equal(time?.dateTime, new Date(timestamp).toISOString());
+    assert.equal(
+      time?.textContent,
+      new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(timestamp),
+    );
     fireEvent.keyDown(field, { key: "Enter" });
     await waitFor(() =>
       assert.deepEqual(slot.inspection.navigateCalls.at(-1), {
         method: "toThread",
         threadId: "t",
-        options: { experimental_messageSeq: 1 },
+        options: { experimental_messageSeq: 27 },
       }),
     );
     fireEvent.keyDown(field, { key: "Enter", shiftKey: true });
@@ -132,7 +135,7 @@ test("command and header open the same search, keyboard navigation crosses pages
       assert.deepEqual(slot.inspection.navigateCalls.at(-1), {
         method: "toThread",
         threadId: "t",
-        options: { experimental_messageSeq: 27 },
+        options: { experimental_messageSeq: 1 },
       }),
     );
     assert.equal(calls.at(-1)?.offset, 25);
@@ -141,9 +144,7 @@ test("command and header open the same search, keyboard navigation crosses pages
     assert.equal(calls.at(-1)?.offset, 0);
     fireEvent.keyDown(field, { key: "Escape" });
     await waitFor(() =>
-      assert.deepEqual(updates, [
-        { threadId: "t", expectedRevision: 3, tabs: [other] },
-      ]),
+      assert.deepEqual(updates, [{ threadId: "t", expectedRevision: 3, tabs: [other] }]),
     );
   } finally {
     slot.lifecycle.unmount();
@@ -237,10 +238,7 @@ test("unsupported hosts explain the missing capability and search errors can be 
   );
   try {
     fireEvent.change(slot.getByRole("searchbox"), { target: { value: "x" } });
-    assert.equal(
-      (await slot.findByRole("alert")).textContent,
-      "Search unavailable",
-    );
+    assert.equal((await slot.findByRole("alert")).textContent, "Search unavailable");
     fail = false;
     fireEvent.click(slot.getByRole("button", { name: "Refresh search" }));
     await slot.findByText("No matching messages.");

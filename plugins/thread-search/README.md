@@ -23,7 +23,7 @@ bb plugin install git:https://github.com/hxy91819/bb-plugins.git@main --plugin t
 
 打开、上一条和下一条通过 `app.commands.register` 注册，可在 Settings → Keyboard 调整；默认避开 BB 桌面端的窗口查找 ⌘/Ctrl+F；已有快捷键冲突时遵循 BB 的冲突处理，不覆盖用户绑定。上一条／下一条仅在当前会话搜索面板可见时生效；无会话页面保留浏览器查找。分屏按当前焦点会话处理。
 
-结果每页 25 条，可跨页循环切换，点击片段定位到整条原消息；高亮显示在搜索片段中。Esc 使用带 revision 校验的公开 tabs API 删除本插件的搜索标签，保留其他标签。并发修改标签导致关闭失败时显示错误，可重试。
+结果每页 25 条，按消息时间从新到旧排列，卡片显示本地日期和时间（精确到分钟）。可跨页循环切换，点击片段定位到原消息。搜索面板打开时，已渲染的会话正文也会高亮关键词，包括定位后才加载的历史消息。清空关键词或隐藏面板会取消正文高亮。旧版 BB 仍支持原有搜索，时间、倒序和正文高亮需要新版配套核心。Esc 使用带 revision 校验的公开 tabs API 删除本插件的搜索标签，保留其他标签。并发修改标签导致关闭失败时显示错误，可重试。
 
 CLI 和 SDK 与 UI 共用核心搜索：
 
@@ -31,7 +31,7 @@ CLI 和 SDK 与 UI 共用核心搜索：
 bb thread search '关键词' --thread <id> --limit 25 --offset 0 --json
 ```
 
-SDK：`threads.experimental_searchMessages({ threadId, query, limit, offset, signal })`。返回 `{ total, matches }`；各命中含 `sourceKind`、`sourceSeq`、`text`、`highlightRanges`。消息按序号升序排列，查询 1–1000 字符，API 每页最多 100 条，默认 50 条。插件不复制消息或维护第二套索引。
+SDK：`threads.experimental_searchMessages({ threadId, query, limit, offset, signal })`。返回 `{ total, matches }`；各命中含 `sourceKind`、`sourceSeq`、`text`、`highlightRanges` 和 `timestamp`（Unix 毫秒，原事件不可用时为 null）。消息按时间倒序排列，同一时间按消息序号倒序，查询 1–1000 字符，API 每页最多 100 条，默认 50 条。插件不复制消息或维护第二套索引。
 
 ## 开发
 

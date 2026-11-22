@@ -8,6 +8,7 @@ export const searchResponse = z.object({
       sourceKind: z.enum(["user_message", "assistant_message"]),
       sourceSeq: z.number().int().nonnegative(),
       text: z.string(),
+      timestamp: z.number().int().nonnegative().max(8.64e15).nullable().optional(),
       highlightRanges: z.array(
         z.object({
           start: z.number().int().nonnegative(),
@@ -25,10 +26,7 @@ export interface SearchInput {
   offset: number;
   signal: AbortSignal;
 }
-export async function searchMessages(
-  threads: object,
-  input: SearchInput,
-): Promise<SearchResult> {
+export async function searchMessages(threads: object, input: SearchInput): Promise<SearchResult> {
   const method: unknown = Reflect.get(threads, "experimental_searchMessages");
   if (typeof method !== "function") {
     throw new Error(
