@@ -56,9 +56,11 @@ This is a provider extension, not a universal ACP steering method.
 For an active run, ordinary text steering is bound to its observed request ID.
 Success requires both admission and a matching user-message insertion receipt
 from that run. It does not cancel the current tool. Commands, images and inputs
-whose run ownership is not yet known request interrupt delivery. An ambiguous
-admission timeout or a missing insertion receipt fails visibly instead of
-claiming success or replaying an input that might already have executed.
+whose run ownership is not yet known request interrupt delivery. If the
+original prompt completes first, the proxy still waits for the steer admission
+reply so an explicit idle or stale rejection can use BB's fallback. An
+ambiguous admission timeout or a missing insertion receipt fails visibly
+without replaying an input that might already have executed.
 
 Explicit `session/cancel` settles waiting inputs, retries missed active cancels
 and maintains a quiet barrier before replacement prompts. As with the original

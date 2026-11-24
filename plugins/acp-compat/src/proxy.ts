@@ -11,6 +11,7 @@ interface Job {
 interface Steer {
   id: Id;
   session: Session;
+  run: Job;
   owner: string;
   messageId: string;
   accepted: boolean;
@@ -152,7 +153,7 @@ export class AcpProxy {
       }
       if (message.method === "session/prompt" && id !== undefined) {
         if (this.native && session.active && !session.cancelMessage) {
-          this.inject(session, { ...message, id });
+          this.inject(session, session.active, { ...message, id });
           return;
         }
         const now = Date.now(),
@@ -201,7 +202,11 @@ export class AcpProxy {
     if (inserted) this.settleSteer(inserted);
   }
 
-  private inject(session: Session, message: Message & { id: Id }): void {
+  private inject(
+    session: Session,
+    run: Job,
+    message: Message & { id: Id },
+  ): void {
     const steering = this.adapter.steering;
     const sid = message.params?.sessionId,
       owner = session.owner;
@@ -221,6 +226,7 @@ export class AcpProxy {
     const entry: Steer = {
       id: message.id,
       session,
+      run,
       owner,
       messageId,
       accepted: false,
@@ -254,12 +260,20 @@ export class AcpProxy {
   }
 
   private settleSteer(entry: Steer): void {
-    if (!entry.accepted || !entry.inserted) return;
-    entry.session.steers.delete(entry.messageId);
-    this.reply(entry.id, {
-      jsonrpc: "2.0",
-      result: { stopReason: "end_turn" },
-    });
+    if (!entry.accepted) return;
+    if (entry.inserted) {
+      entry.session.steers.delete(entry.messageId);
+      this.reply(entry.id, {
+        jsonrpc: "2.0",
+        result: { stopReason: "end_turn" },
+      });
+    } else if (entry.session.active !== entry.run) {
+      entry.session.steers.delete(entry.messageId);
+      this.fail(
+        entry.id,
+        "Active run ended without the required steer insertion receipt",
+      );
+    }
   }
 
   private cancel(sid: string, session: Session, message: Message): void {
@@ -338,12 +352,7 @@ export class AcpProxy {
       session.active = null;
       session.owner = null;
       for (const steer of session.steers.values()) {
-        if (steer.inserted) continue;
-        session.steers.delete(steer.messageId);
-        this.fail(
-          steer.id,
-          "Active run ended without the required steer insertion receipt",
-        );
+        if (steer.run === job) this.settleSteer(steer);
       }
       if (
         reply.result?.stopReason === "cancelled" &&

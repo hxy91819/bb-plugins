@@ -224,6 +224,21 @@ describe("native steering protocol", () => {
       });
     },
   );
+  it("preserves BB's fallback when an idle rejection follows prompt completion", () => {
+    initialize();
+    prompt(2);
+    const main = down.at(-1)!;
+    observe();
+    prompt(3);
+    const steer = down.at(-1)!;
+    response(main, { stopReason: "end_turn" });
+    response(steer, { steered: false, reason: "idle" });
+    expect(replies(3)).toHaveLength(1);
+    expect(replies(3)[0].error).toMatchObject({
+      code: -32602,
+      message: expect.stringMatching(/already in flight/),
+    });
+  });
   it("fails ambiguous admission without permitting automatic replay", () => {
     initialize();
     prompt(2);
@@ -232,16 +247,28 @@ describe("native steering protocol", () => {
     vi.advanceTimersByTime(3000);
     expect(replies(3)[0].error?.code).toBe(-32000);
   });
-  it("fails an accepted input if its run finishes without an insertion receipt", () => {
-    initialize();
-    prompt(2);
-    const main = down.at(-1)!;
-    observe();
-    prompt(3);
-    response(down.at(-1)!, { steered: true, ownerRequestId: "run-1" });
-    response(main, { stopReason: "end_turn" });
-    expect(replies(3)[0].error?.code).toBe(-32000);
-  });
+  it.each(["before", "after"])(
+    "fails an input without insertion when the admission arrives %s run completion",
+    (timing) => {
+      initialize();
+      prompt(2);
+      const main = down.at(-1)!;
+      observe();
+      prompt(3);
+      const steer = down.at(-1)!;
+      const admit = () =>
+        response(steer, { steered: true, ownerRequestId: "run-1" });
+      if (timing === "before") admit();
+      response(main, { stopReason: "end_turn" });
+      if (timing === "after") admit();
+      expect(replies(3)).toHaveLength(1);
+      expect(replies(3)[0].error).toMatchObject({
+        code: -32000,
+        message:
+          "Active run ended without the required steer insertion receipt",
+      });
+    },
+  );
   it.each(["/compact", "/some-skill"])(
     "requests interrupt delivery for command %s",
     (text) => {
