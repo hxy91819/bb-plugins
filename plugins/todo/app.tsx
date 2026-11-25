@@ -1477,47 +1477,49 @@ function TodoRow({
           expanded ? "bg-card" : selected ? "bg-accent pb-2.5" : "pb-2.5 hover:bg-accent"
         } ${dragging ? "opacity-40" : ""}`}
       >
-        <button
-          type="button"
-          aria-label={`拖动 ${item.id}`}
-          title="拖动调整位置"
-          onPointerDown={(event) => {
-            if (event.button !== 0) return;
-            event.preventDefault();
-            event.stopPropagation();
-            onDragStart(item, event);
-          }}
-          onClick={(event) => event.stopPropagation()}
-          style={{ marginTop: 0, padding: 0, height: "1.25rem", width: "1rem" }}
-          className="flex h-5 w-4 shrink-0 touch-none cursor-grab appearance-none items-center justify-center rounded border-0 bg-transparent p-0 text-muted-foreground/70 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
-        >
-          <GripIcon />
-        </button>
-        <button
-          type="button"
-          role="checkbox"
-          aria-checked={checked}
-          aria-label={`完成 ${item.id}`}
-          disabled={busy}
-          onClick={(event) => {
-            event.stopPropagation();
-            if (modifierSelect(event)) {
-              onRangeSelect(item.id, event);
-              return;
-            }
-            void toggleCompleted();
-          }}
-          style={{ ...(checkStyle(color, checked) ?? {}), marginTop: 0, padding: 0, height: "1.25rem", width: "1.25rem" }}
-          className={`flex h-5 w-5 shrink-0 touch-manipulation cursor-pointer appearance-none items-center justify-center rounded-full border transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default ${
-            color
-              ? ""
-              : checked
-                ? "border-primary bg-primary text-primary-foreground"
-                : "border-muted-foreground bg-transparent text-transparent hover:border-primary"
-          }`}
-        >
-          <CheckIcon />
-        </button>
+        <div className="flex h-5 shrink-0 items-center gap-1.5">
+          <button
+            type="button"
+            aria-label={`拖动 ${item.id}`}
+            title="拖动调整位置"
+            onPointerDown={(event) => {
+              if (event.button !== 0) return;
+              event.preventDefault();
+              event.stopPropagation();
+              onDragStart(item, event);
+            }}
+            onClick={(event) => event.stopPropagation()}
+            style={{ marginTop: 0, padding: 0, height: "1rem", width: "1rem" }}
+            className="flex h-4 w-4 shrink-0 touch-none cursor-grab appearance-none items-center justify-center rounded border-0 bg-transparent p-0 text-muted-foreground/70 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
+          >
+            <GripIcon />
+          </button>
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={checked}
+            aria-label={`完成 ${item.id}`}
+            disabled={busy}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (modifierSelect(event)) {
+                onRangeSelect(item.id, event);
+                return;
+              }
+              void toggleCompleted();
+            }}
+            style={{ ...(checkStyle(color, checked) ?? {}), marginTop: 0, padding: 0, height: "1rem", width: "1rem" }}
+            className={`flex h-4 w-4 shrink-0 touch-manipulation cursor-pointer appearance-none items-center justify-center rounded-full border transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default ${
+              color
+                ? ""
+                : checked
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-muted-foreground bg-transparent text-transparent hover:border-primary"
+            }`}
+          >
+            <CheckIcon className="h-2.5 w-2.5" />
+          </button>
+        </div>
         <div className="min-w-0 flex-1" data-todo-main>
           <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
             {editingTitle ? (
@@ -1750,7 +1752,7 @@ function BottomInsertRow({
     >
       <span
         aria-hidden="true"
-        className="h-5 w-5 shrink-0 rounded-full border border-dashed border-muted-foreground/50 transition-colors group-hover:border-muted-foreground"
+        className="h-4 w-4 shrink-0 rounded-full border border-dashed border-muted-foreground/50 transition-colors group-hover:border-muted-foreground"
       />
       <span className="text-sm leading-5 text-muted-foreground/60 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
         新建待办
@@ -1862,8 +1864,8 @@ function InlineTodoDraftRow({
     >
       <span
         aria-hidden="true"
-        style={checkStyle(color, false)}
-        className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
+        style={{ ...(checkStyle(color, false) ?? {}), height: "1rem", width: "1rem" }}
+        className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
           color ? "" : "border-muted-foreground"
         }`}
       />
@@ -2164,12 +2166,12 @@ function DoneRow({
         aria-label={`恢复 ${item.id}`}
         disabled={busy}
         onClick={() => void restore()}
-        style={checkStyle(color, true)}
-        className={`mt-0.5 flex h-5 w-5 shrink-0 touch-manipulation cursor-pointer items-center justify-center rounded-full border text-primary-foreground transition-all duration-150 hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default ${
+        style={{ ...(checkStyle(color, true) ?? {}), height: "1rem", width: "1rem" }}
+        className={`mt-0.5 flex h-4 w-4 shrink-0 touch-manipulation cursor-pointer items-center justify-center rounded-full border text-primary-foreground transition-all duration-150 hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default ${
           color ? "" : "border-primary bg-primary"
         }`}
       >
-        <CheckIcon />
+        <CheckIcon className="h-2.5 w-2.5" />
       </button>
       <div className="min-w-0 flex-1">
         <p className="break-words text-sm text-muted-foreground">{item.title}</p>

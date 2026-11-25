@@ -930,7 +930,7 @@ test("折叠行是干净的三段式：标题只在主列，编号留在悬停 t
     const row = titleNode.closest("[data-todo-row]");
     assert.ok(row);
     const checkbox = within(row as HTMLElement).getByRole("checkbox", { name: "完成 T-1" });
-    assert.equal(checkbox.style.height, "1.25rem");
+    assert.equal(checkbox.style.height, "1rem");
     assert.equal(checkbox.style.marginTop, "0px");
     const rail = row.querySelector("[data-todo-rail]");
     const main = row.querySelector("[data-todo-main]");
