@@ -5,6 +5,6 @@
   "type": "module",
   "license": "MIT",
   "dependencies": {
-    "antigravity-acp": "https://codeload.github.com/hxy91819/antigravity-acp/tar.gz/1eb31721ba72b773040c9c16fdbb28c09be98c20"
+    "antigravity-acp": "https://codeload.github.com/hxy91819/antigravity-acp/tar.gz/19c5f1da0aea5075b623a3333010acd76d3c42c8"
   }
 }
