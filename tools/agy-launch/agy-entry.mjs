@@ -40,4 +40,5 @@ if (!populated && !process.argv.includes("--version")) {
 	}
 }
 
+process.env.AGY_ACP_USE_BB_AUTOMATIONS = "1";
 await import("./node_modules/antigravity-acp/index.ts");

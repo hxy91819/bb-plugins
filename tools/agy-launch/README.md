@@ -4,6 +4,8 @@ BB 的 AGY 模型目录预热入口由集合维护；适配器实现继续来自
 
 安装依赖：`npm ci --prefix tools/agy-launch --ignore-scripts`。需要本机已有 Bun 和登录后的 `agy` CLI，不运行依赖的 CLI 下载脚本。
 
+在执行 AGY 的主机上运行 `agy plugin install "$PWD/tools/agy-launch/node_modules/antigravity-acp/plugin"`（从集合根目录执行）。此插件为同轮 steer 提供回执，并将 BB 启动的 AGY 原生 `schedule` 请求引导到以当前线程为目标的 BB agent automation。
+
 在完整读取 customAgents 后，仅合并 AGY 的 `args` 为 checkout 中本文件旁的 `agy-entry.mjs` 绝对路径，保留其他字段与条目。`command` 使用本机 Bun；`env.AGY_BIN` 指向本机 agy，保留 `AGY_SKIP_DOWNLOAD=1`。迁移前后用真实 BB 会话验证，不能以模型发现代替。
 
-入口来自 antigravity-acp 的 `3b4b7bde3d003b7400c4601e4579dbbb7c8a2967`，仅将本地 index 导入改为锁定依赖导入；MIT 许可见 LICENSE。升级时先更新精确 commit 和 lockfile，再运行隔离的安装、语法检查、依赖审计和真实会话验收。常规 Dependabot 可更新传递依赖；fork commit 升级需手动验收。
+入口来自 antigravity-acp 的 `3b4b7bde3d003b7400c4601e4579dbbb7c8a2967`，MIT 许可见 LICENSE。入口导入锁定的适配器，并启用 BB 的定时续办方式。升级时先更新精确 commit 和 lockfile，再运行隔离的安装、语法检查、依赖审计和真实会话验收。常规 Dependabot 可更新传递依赖；fork commit 升级需手动验收。
