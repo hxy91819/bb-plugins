@@ -923,10 +923,15 @@ test("折叠行是干净的三段式：标题只在主列，编号留在悬停 t
     assert.ok(titleNode.className.includes("break-words"));
     assert.ok(titleNode.className.includes("font-medium"));
     assert.equal(titleNode.getAttribute("title"), `T-1 ${title}`);
+    assert.equal((titleNode as HTMLElement).style.lineHeight, "1.25rem");
+    assert.equal((titleNode as HTMLElement).style.padding, "0px");
     assert.equal(slot.queryByText("下一步"), null);
 
     const row = titleNode.closest("[data-todo-row]");
     assert.ok(row);
+    const checkbox = within(row as HTMLElement).getByRole("checkbox", { name: "完成 T-1" });
+    assert.equal(checkbox.style.height, "1.25rem");
+    assert.equal(checkbox.style.marginTop, "0px");
     const rail = row.querySelector("[data-todo-rail]");
     const main = row.querySelector("[data-todo-main]");
     assert.ok(rail);

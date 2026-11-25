@@ -1488,7 +1488,8 @@ function TodoRow({
             onDragStart(item, event);
           }}
           onClick={(event) => event.stopPropagation()}
-          className="mt-0.5 flex h-5 w-4 shrink-0 touch-none cursor-grab appearance-none items-center justify-center rounded border-0 bg-transparent p-0 text-muted-foreground/70 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
+          style={{ marginTop: 0, padding: 0, height: "1.25rem", width: "1rem" }}
+          className="flex h-5 w-4 shrink-0 touch-none cursor-grab appearance-none items-center justify-center rounded border-0 bg-transparent p-0 text-muted-foreground/70 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
         >
           <GripIcon />
         </button>
@@ -1506,8 +1507,8 @@ function TodoRow({
             }
             void toggleCompleted();
           }}
-          style={checkStyle(color, checked)}
-          className={`mt-0.5 flex h-5 w-5 shrink-0 touch-manipulation cursor-pointer appearance-none items-center justify-center rounded-full border transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default ${
+          style={{ ...(checkStyle(color, checked) ?? {}), marginTop: 0, padding: 0, height: "1.25rem", width: "1.25rem" }}
+          className={`flex h-5 w-5 shrink-0 touch-manipulation cursor-pointer appearance-none items-center justify-center rounded-full border transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default ${
             color
               ? ""
               : checked
@@ -1550,6 +1551,7 @@ function TodoRow({
                   }
                   beginTitleEdit();
                 }}
+                style={{ padding: 0, lineHeight: "1.25rem" }}
                 className="min-w-0 max-w-full touch-manipulation cursor-text appearance-none break-words border-0 bg-transparent p-0 text-left text-sm font-medium leading-5 text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {optimisticTitle ?? item.title}
@@ -1600,7 +1602,7 @@ function TodoRow({
             </p>
           ) : null}
         </div>
-        <div className="flex shrink-0 items-center gap-0.5" data-todo-rail>
+        <div className="flex h-5 shrink-0 items-center gap-0.5" data-todo-rail>
           <ThreadCountBadge item={item} onShowThreads={onShowThreads} />
           {item.completedAt === null ? (
             <StartSessionButton item={item} onError={onError} variant="icon" />
