@@ -1471,6 +1471,194 @@ test("quickAdd afterId inserts immediately after target row and rebalances ties"
   }
 });
 
+test("reorder places a block before another row and undo restores it", async () => {
+  const { bb, harness } = fixture();
+  try {
+    await plugin(bb);
+    const first = (await harness.behavior.callRpc("quickAdd", { title: "First", bucket: "focus" })) as TodoItem;
+    const second = (await harness.behavior.callRpc("quickAdd", {
+      title: "Second",
+      bucket: "focus",
+      listName: "LightSpace",
+      sectionName: "上架",
+    })) as TodoItem;
+    const third = (await harness.behavior.callRpc("quickAdd", { title: "Third", bucket: "focus" })) as TodoItem;
+
+    const already = (await harness.behavior.callRpc("reorder", {
+      ids: [first.id],
+      beforeId: second.id,
+    })) as { changed: boolean };
+    assert.equal(already.changed, false);
+
+    const moved = (await harness.behavior.callRpc("reorder", {
+      ids: [third.id, second.id],
+      beforeId: first.id,
+    })) as { changed: boolean };
+    assert.equal(moved.changed, true);
+    const reordered = (await harness.behavior.callRpc("listSnapshot", {})) as TodoSnapshot;
+    assert.deepEqual(
+      reordered.buckets.focus.map((item) => item.id),
+      [third.id, second.id, first.id],
+    );
+    assert.equal(reordered.buckets.focus.find((item) => item.id === second.id)?.listName, "LightSpace");
+
+    const filed = (await harness.behavior.callRpc("reorder", {
+      ids: [third.id],
+      beforeId: second.id,
+      listName: "LightSpace",
+      sectionName: "上架",
+    })) as { changed: boolean; items: TodoItem[] };
+    assert.equal(filed.changed, true);
+    assert.equal(filed.items[0]?.sectionName, "上架");
+    const grouped = (await harness.behavior.callRpc("listSnapshot", {})) as TodoSnapshot;
+    const sectionOrder = grouped.buckets.focus
+      .filter((item) => item.sectionName === "上架")
+      .map((item) => item.id);
+    assert.deepEqual(sectionOrder, [third.id, second.id]);
+
+    await harness.behavior.callRpc("undoRevision", {});
+    const restored = (await harness.behavior.callRpc("listSnapshot", {})) as TodoSnapshot;
+    assert.equal(restored.buckets.focus.find((item) => item.id === third.id)?.sectionName, "");
+    assert.deepEqual(
+      restored.buckets.focus.map((item) => item.id),
+      [third.id, second.id, first.id],
+    );
+  } finally {
+    await harness.lifecycle.dispose();
+  }
+});
+
+test("tied sort orders stay reversible, and an empty group appends after its list", async () => {
+  const { bb, harness } = fixture();
+  try {
+    await plugin(bb);
+    const first = (await harness.behavior.callRpc("quickAdd", {
+      title: "A",
+      bucket: "focus",
+      listName: "LightSpace",
+    })) as TodoItem;
+    const second = (await harness.behavior.callRpc("quickAdd", {
+      title: "B",
+      bucket: "focus",
+      listName: "Other",
+    })) as TodoItem;
+    const third = (await harness.behavior.callRpc("quickAdd", {
+      title: "C",
+      bucket: "focus",
+    })) as TodoItem;
+    for (const item of [first, second, third]) {
+      await harness.behavior.callRpc("update", { id: item.id, sortOrder: 0 });
+    }
+
+    await harness.behavior.callRpc("reorder", { ids: [third.id], beforeId: second.id });
+    const moved = (await harness.behavior.callRpc("listSnapshot", {})) as TodoSnapshot;
+    assert.deepEqual(
+      moved.buckets.focus.map((item) => item.id),
+      [first.id, third.id, second.id],
+    );
+    await harness.behavior.callRpc("undoRevision", {});
+    const restored = (await harness.behavior.callRpc("listSnapshot", {})) as TodoSnapshot;
+    assert.deepEqual(
+      restored.buckets.focus.map((item) => item.id),
+      [first.id, second.id, third.id],
+    );
+
+    await runJson(harness, ["move", third.id, "--list", "Other", "--section", "新"]);
+    const appended = (await harness.behavior.callRpc("listSnapshot", {})) as TodoSnapshot;
+    assert.deepEqual(
+      appended.buckets.focus.map((item) => item.id),
+      [first.id, second.id, third.id],
+    );
+    const placed = appended.buckets.focus.find((item) => item.id === third.id);
+    assert.equal(placed?.listName, "Other");
+    assert.equal(placed?.sectionName, "新");
+  } finally {
+    await harness.lifecycle.dispose();
+  }
+});
+
+test("batch complete, move, and delete are each one undoable change", async () => {
+  const { bb, harness } = fixture();
+  try {
+    await plugin(bb);
+    const keep = (await harness.behavior.callRpc("quickAdd", {
+      title: "Keep",
+      bucket: "later",
+      listName: "Alpha",
+    })) as TodoItem;
+    const first = (await harness.behavior.callRpc("quickAdd", {
+      title: "First",
+      bucket: "focus",
+      listName: "Alpha",
+    })) as TodoItem;
+    const second = (await harness.behavior.callRpc("quickAdd", {
+      title: "Second",
+      bucket: "focus",
+      listName: "Beta",
+    })) as TodoItem;
+
+    const moved = (await runJson(harness, [
+      "batch",
+      "move",
+      first.id,
+      second.id,
+      "--bucket",
+      "later",
+    ])) as { changed: boolean; ids: string[] };
+    assert.equal(moved.changed, true);
+    assert.deepEqual(moved.ids, [first.id, second.id]);
+    const afterMove = (await harness.behavior.callRpc("listSnapshot", {})) as TodoSnapshot;
+    assert.deepEqual(
+      afterMove.buckets.later.map((item) => item.id),
+      [keep.id, first.id, second.id],
+    );
+    assert.equal(afterMove.buckets.later.find((item) => item.id === second.id)?.listName, "Beta");
+
+    const samePlace = (await runJson(harness, [
+      "batch",
+      "move",
+      first.id,
+      "--bucket",
+      "later",
+    ])) as { changed: boolean };
+    assert.equal(samePlace.changed, false);
+
+    await runJson(harness, ["batch", "complete", first.id, second.id]);
+    const completed = (await harness.behavior.callRpc("listSnapshot", {})) as TodoSnapshot;
+    assert.deepEqual(
+      completed.done.map((item) => item.id).sort(),
+      [first.id, second.id].sort(),
+    );
+    const history = (await runJson(harness, ["history", "--limit", "5"])) as {
+      revisions: Array<{ summary: string; undoneAt: string | null }>;
+    };
+    assert.equal(history.revisions.filter((revision) => revision.undoneAt === null).length >= 2, true);
+    await runJson(harness, ["undo"]);
+    const reopened = (await harness.behavior.callRpc("listSnapshot", {})) as TodoSnapshot;
+    assert.deepEqual(
+      reopened.buckets.later.map((item) => item.id),
+      [keep.id, first.id, second.id],
+    );
+
+    await runJson(harness, ["batch", "delete", first.id, second.id]);
+    const deleted = (await harness.behavior.callRpc("listSnapshot", {})) as TodoSnapshot;
+    assert.deepEqual(deleted.buckets.later.map((item) => item.id), [keep.id]);
+    await runJson(harness, ["undo"]);
+    const returned = (await harness.behavior.callRpc("listSnapshot", {})) as TodoSnapshot;
+    assert.deepEqual(
+      returned.buckets.later.map((item) => item.id),
+      [keep.id, first.id, second.id],
+    );
+
+    const rejected = await runJsonError(harness, ["batch", "move", keep.id]);
+    assert.equal(rejected.error.code, "invalid_input");
+    const missing = await runJsonError(harness, ["move", "T-99", "--before", keep.id]);
+    assert.equal(missing.error.code, "not_found");
+  } finally {
+    await harness.lifecycle.dispose();
+  }
+});
+
 test("package imports only public SDK surfaces", async () => {
   const result = await experimental_scanPublicSdkOnly(process.cwd(), {
     // Frontend test-only tooling; production code keeps the server surface free

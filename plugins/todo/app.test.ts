@@ -313,6 +313,36 @@ function handlers(store: Store) {
       }
       return { accepted };
     },
+    reorder: (input: {
+      ids: string[];
+      beforeId?: string;
+      bucket?: TodoFormalBucket;
+      listName?: string;
+      sectionName?: string;
+    }) => {
+      const items = input.ids.map((id) => {
+        const item = store.find(id);
+        if (input.bucket) item.bucket = input.bucket;
+        if (input.listName !== undefined) item.listName = input.listName;
+        if (input.sectionName !== undefined) item.sectionName = input.sectionName;
+        return touch(item);
+      });
+      return { ids: input.ids, changed: true, items };
+    },
+    batch: (input: {
+      ids: string[];
+      action: "complete" | "delete" | "move";
+      bucket?: TodoFormalBucket;
+    }) => {
+      if (input.action === "complete") {
+        for (const id of input.ids) store.find(id).completedAt = createdAt;
+      } else if (input.action === "delete") {
+        store.items = store.items.filter((item) => !input.ids.includes(item.id));
+      } else if (input.bucket) {
+        for (const id of input.ids) store.find(id).bucket = input.bucket;
+      }
+      return { action: input.action, ids: input.ids, changed: true };
+    },
   };
 }
 
@@ -971,6 +1001,39 @@ test("最近变更抽屉可以撤销一条记录", async () => {
   }
 });
 
+test("标题里按 Tab 进入备注并选中全文，Shift+Tab 回到标题", async () => {
+  const store = new Store();
+  store.add({ title: "写前端", notes: "先列范围" });
+  const slot = await mountedPanel(store);
+  try {
+    fireEvent.click(await slot.findByRole("button", { name: "写前端" }));
+    const title = (await slot.findByLabelText("编辑标题 T-1")) as HTMLTextAreaElement;
+    const notes = slot.getByLabelText("编辑备注 T-1") as HTMLTextAreaElement;
+    assert.equal(document.activeElement, title);
+
+    fireEvent.keyDown(title, { key: "Tab" });
+    assert.equal(document.activeElement, notes);
+    assert.equal(notes.selectionStart, 0);
+    assert.equal(notes.selectionEnd, "先列范围".length);
+
+    fireEvent.keyDown(notes, { key: "Tab", shiftKey: true });
+    assert.equal(document.activeElement, title);
+    assert.equal(slot.inspection.rpcCalls.some((call) => call.method === "update"), false);
+
+    fireEvent.keyDown(title, { key: "Tab" });
+    fireEvent.change(notes, { target: { value: "先列验收" } });
+    fireEvent.blur(notes);
+    await waitFor(() =>
+      assert.deepEqual(slot.inspection.rpcCalls.filter((call) => call.method === "update"), [
+        { method: "update", input: { id: "T-1", notes: "先列验收" } },
+      ]),
+    );
+  } finally {
+    slot.lifecycle.unmount();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+});
+
 test("折叠行标题可原地编辑：Enter 与失焦保存，Escape 取消", async () => {
   const store = new Store();
   store.add({ title: "写前端" });
@@ -1274,5 +1337,142 @@ test("在任意行按 Enter 可在其下方原地插入新待办，底部虚线�
   } finally {
     slot.lifecycle.unmount();
     await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+});
+
+test("Shift 选择连续待办，Ctrl 增减单条，批量完成一次提交", async () => {
+  const store = new Store();
+  store.add({ title: "甲", listName: "LightSpace" });
+  store.add({ title: "乙", listName: "LightSpace", sectionName: "上架" });
+  store.add({ title: "丙", listName: "LightSpace", sectionName: "上架" });
+  const slot = await mountedPanel(store);
+  try {
+    fireEvent.click(await slot.findByRole("button", { name: "甲" }), { shiftKey: true });
+    fireEvent.click(slot.getByRole("button", { name: "丙" }), { shiftKey: true });
+    assert.ok(await slot.findByRole("toolbar", { name: "批量操作" }));
+    assert.equal(slot.getByText("已选 3").textContent, "已选 3");
+
+    fireEvent.click(slot.getByRole("button", { name: "乙" }), { ctrlKey: true });
+    assert.equal(slot.getByText("已选 2").textContent, "已选 2");
+
+    fireEvent.click(slot.getByRole("button", { name: "完成所选" }));
+    await waitFor(() =>
+      assert.deepEqual(
+        slot.inspection.rpcCalls.filter((call) => call.method === "batch"),
+        [{ method: "batch", input: { ids: ["T-1", "T-3"], action: "complete" } }],
+      ),
+    );
+    assert.equal(slot.queryByRole("toolbar", { name: "批量操作" }), null);
+    assert.equal(
+      slot.inspection.rpcCalls.some((call) => call.method === "setCompleted"),
+      false,
+    );
+  } finally {
+    slot.lifecycle.unmount();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+});
+
+test("平铺拖动按可见顺序插入，不跨栏，折叠后的选择不再计入", async () => {
+  window.localStorage.setItem(
+    "bb-plugin-todo:view-state:v1",
+    JSON.stringify({ listFilter: null, groupByList: false, collapsedSections: [], showDone: false }),
+  );
+  const store = new Store();
+  store.add({ title: "甲", listName: "Alpha" });
+  store.add({ title: "乙", listName: "Beta" });
+  store.add({ title: "丙", listName: "Beta", bucket: "later" });
+  const slot = await mountedPanel(store);
+  const original = document.elementFromPoint;
+  try {
+    const handle = await slot.findByRole("button", { name: "拖动 T-1" });
+    const self = slot.container.querySelector('[data-todo-id="T-1"]');
+    assert.ok(self);
+    document.elementFromPoint = () => self;
+    fireEvent.pointerDown(handle, { pointerId: 1, button: 0, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(handle, { pointerId: 1, clientX: 12, clientY: 0 });
+    fireEvent.pointerUp(handle, { pointerId: 1, clientX: 12, clientY: 0 });
+    await waitFor(() =>
+      assert.deepEqual(
+        slot.inspection.rpcCalls.filter((call) => call.method === "reorder"),
+        [{ method: "reorder", input: { ids: ["T-1"], beforeId: "T-2", bucket: "focus" } }],
+      ),
+    );
+
+    const later = slot.container.querySelector('[data-todo-id="T-3"]');
+    assert.ok(later);
+    document.elementFromPoint = () => later;
+    fireEvent.pointerDown(handle, { pointerId: 2, button: 0, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(handle, { pointerId: 2, clientX: 12, clientY: 0 });
+    fireEvent.pointerUp(handle, { pointerId: 2, clientX: 12, clientY: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(slot.inspection.rpcCalls.filter((call) => call.method === "reorder").length, 1);
+  } finally {
+    document.elementFromPoint = original;
+    slot.lifecycle.unmount();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  window.localStorage.clear();
+  const grouped = new Store();
+  grouped.add({ title: "甲", listName: "L" });
+  grouped.add({ title: "乙", listName: "L", sectionName: "S" });
+  grouped.add({ title: "丙", listName: "L", sectionName: "S" });
+  const panel = await mountedPanel(grouped);
+  try {
+    fireEvent.click(await panel.findByRole("button", { name: "甲" }), { shiftKey: true });
+    fireEvent.click(panel.getByRole("button", { name: "丙" }), { shiftKey: true });
+    assert.equal(panel.getByText("已选 3").textContent, "已选 3");
+    fireEvent.click(panel.getByRole("button", { name: /^S/ }));
+    assert.equal(panel.getByText("已选 1").textContent, "已选 1");
+  } finally {
+    panel.lifecycle.unmount();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+});
+
+test("拖动手柄越过阈值后，把待办放到目标行前面", async () => {
+  const store = new Store();
+  store.add({ title: "甲" });
+  store.add({ title: "乙" });
+  store.add({ title: "丙" });
+  const slot = await mountedPanel(store);
+  const original = document.elementFromPoint;
+  try {
+    const handle = await slot.findByRole("button", { name: "拖动 T-3" });
+    fireEvent.pointerDown(handle, { pointerId: 1, button: 0, clientX: 0, clientY: 0 });
+    fireEvent.pointerUp(handle, { pointerId: 1, clientX: 1, clientY: 1 });
+    assert.equal(
+      slot.inspection.rpcCalls.some((call) => call.method === "reorder"),
+      false,
+    );
+
+    const target = slot.container.querySelector('[data-todo-id="T-1"]');
+    assert.ok(target);
+    document.elementFromPoint = () => target;
+    fireEvent.pointerDown(handle, { pointerId: 2, button: 0, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(handle, { pointerId: 2, clientX: 12, clientY: 12 });
+    fireEvent.pointerUp(handle, { pointerId: 2, clientX: 12, clientY: 12 });
+    await waitFor(() =>
+      assert.deepEqual(
+        slot.inspection.rpcCalls.filter((call) => call.method === "reorder"),
+        [
+          {
+            method: "reorder",
+            input: {
+              ids: ["T-3"],
+              beforeId: "T-1",
+              bucket: "focus",
+              listName: "",
+              sectionName: "",
+            },
+          },
+        ],
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  } finally {
+    document.elementFromPoint = original;
+    slot.lifecycle.unmount();
   }
 });

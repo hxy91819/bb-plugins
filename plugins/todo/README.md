@@ -114,12 +114,19 @@ repeats the page title.
   in `localStorage` (`bb-plugin-todo:view-state:v1`), so leaving for a session
   and coming back keeps the same view. A persisted filter whose list no longer
   exists in the snapshot falls back to “全部” after the first load.
-- **Rows**: the round checkbox uses the list color. The collapsed row is one
-  title followed by up to two lines of notes, with a fixed right rail for the
+- **Rows**: the round checkbox uses the list color. The grip before it drags
+  one row, or the current selection, to a new position. In the grouped view the
+  drop also adopts that list and section; the flat view only changes order
+  inside the bucket. Shift-click selects the visible range, and Ctrl/Cmd-click
+  toggles one row. The batch bar can complete, move between Focus / Later /
+  Waiting, or delete the selection as one undoable change. Escape clears the
+  selection. The collapsed row is one title followed by up to two lines of notes, with a fixed right rail for the
   thread-count capsule, new-session icon, and disclosure. Clicking
   the title edits it in place in a borderless auto-growing textarea; Enter
   (outside an IME composition) or blur saves, Escape cancels, and an empty draft
-  restores the original title. Only the disclosure chevron or the row's blank
+  restores the original title. Tab, while the caret is in that title, moves into
+  the notes field and selects its text; Shift+Tab returns to the title. Leaving
+  either field saves a changed title and notes together. Only the disclosure chevron or the row's blank
   edge expands details; a title click always starts inline editing instead.
   Expanded rows put the full editable notes immediately below the title.
   “更多详情” contains the todo ID and opens the title, bucket, list, section,
@@ -162,7 +169,7 @@ is therefore not registered. Revisit when the host SDK exposes that slot.
 channel. Methods: `listSnapshot`, `quickAdd`, `update`, `setCompleted`,
 `triageInbox`, `addLog`, `linkThread`, `unlinkThread`, `remove`,
 `prepareStartSession`, `setListColor`, `listRevisions`, `undoRevision`,
-`suggest`, `resolveSuggestion`, `acceptAllSuggestions`.
+`suggest`, `resolveSuggestion`, `acceptAllSuggestions`, `reorder`, `batch`.
 Every successful write publishes `todo:changed` on `bb.realtime`.
 `prepareStartSession` does not write; `bb todo start` does.
 

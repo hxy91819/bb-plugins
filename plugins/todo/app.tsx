@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   CSSProperties,
+  FocusEvent as ReactFocusEvent,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
 } from "react";
 import {
   definePluginApp,
@@ -164,6 +166,144 @@ function colorOf(lists: TodoListSummary[], listName: string): TodoColor | null {
   return lists.find((list) => list.name === listName)?.color ?? null;
 }
 
+type DropTarget = {
+  bucket: TodoFormalBucket;
+  listName: string;
+  sectionName: string;
+  beforeId: string | null;
+};
+
+function sameDropGroup(
+  target: DropTarget,
+  bucket: string,
+  listName: string,
+  sectionName: string,
+): boolean {
+  return target.bucket === bucket && target.listName === listName && target.sectionName === sectionName;
+}
+
+function visibleTodoIds(
+  snapshot: TodoSnapshot,
+  listFilter: string | null,
+  groupByList: boolean,
+  collapsedSections: ReadonlySet<string>,
+): string[] {
+  const ids: string[] = [];
+  for (const bucket of FORMAL_BUCKETS) {
+    const visible = snapshot.buckets[bucket].filter(
+      (item) => listFilter === null || item.listName === listFilter,
+    );
+    if (visible.length === 0) continue;
+    const grouped = listFilter !== null || groupByList;
+    if (!grouped) {
+      ids.push(...visible.map((item) => item.id));
+      continue;
+    }
+    const showListHeaders = groupByList && listFilter === null;
+    const listOrder = showListHeaders
+      ? [...new Set(visible.map((item) => item.listName))]
+      : [listFilter ?? ""];
+    for (const listName of listOrder) {
+      const inList = showListHeaders ? visible.filter((item) => item.listName === listName) : visible;
+      for (const item of inList) {
+        if (item.sectionName.length === 0) ids.push(item.id);
+      }
+      const sectionNames = [
+        ...new Set(inList.map((item) => item.sectionName).filter((name) => name.length > 0)),
+      ];
+      for (const sectionName of sectionNames) {
+        if (collapsedSections.has(`${listName}\0${sectionName}`)) continue;
+        for (const item of inList) {
+          if (item.sectionName === sectionName) ids.push(item.id);
+        }
+      }
+    }
+  }
+  return ids;
+}
+
+function readDropTarget(x: number, y: number, grouped: boolean): DropTarget | null {
+  const hit = document.elementFromPoint(x, y);
+  if (!hit) return null;
+  const row = hit.closest("[data-todo-row]");
+  if (row instanceof HTMLElement && row.dataset.todoId && row.dataset.todoBucket) {
+    const bucket = row.dataset.todoBucket;
+    if (bucket !== "focus" && bucket !== "later" && bucket !== "waiting") return null;
+    const listName = row.dataset.todoList ?? "";
+    const sectionName = row.dataset.todoSection ?? "";
+    const rect = row.getBoundingClientRect();
+    const after = rect.height > 0 && y >= rect.top + rect.height / 2;
+    return {
+      bucket,
+      listName,
+      sectionName,
+      beforeId: after ? (grouped ? nextRowInGroup(row) : nextVisibleInBucket(row)) : row.dataset.todoId,
+    };
+  }
+  const zone = hit.closest("[data-todo-drop-end]");
+  if (!(zone instanceof HTMLElement) || !zone.dataset.todoBucket) return null;
+  const bucket = zone.dataset.todoBucket;
+  if (bucket !== "focus" && bucket !== "later" && bucket !== "waiting") return null;
+  return {
+    bucket,
+    listName: zone.dataset.todoList ?? "",
+    sectionName: zone.dataset.todoSection ?? "",
+    beforeId: null,
+  };
+}
+
+function nextVisibleInBucket(row: HTMLElement): string | null {
+  const rows = [...document.querySelectorAll<HTMLElement>("[data-todo-row]")];
+  const index = rows.indexOf(row);
+  const next = rows[index + 1];
+  if (!next || next.dataset.todoBucket !== row.dataset.todoBucket) return null;
+  return next.dataset.todoId ?? null;
+}
+
+function nextRowInGroup(row: HTMLElement): string | null {
+  const rows = [...document.querySelectorAll<HTMLElement>("[data-todo-row]")];
+  const index = rows.indexOf(row);
+  const bucket = row.dataset.todoBucket ?? "";
+  const listName = row.dataset.todoList ?? "";
+  const sectionName = row.dataset.todoSection ?? "";
+  for (let cursor = index + 1; cursor < rows.length; cursor += 1) {
+    const candidate = rows[cursor]!;
+    if (
+      (candidate.dataset.todoBucket ?? "") !== bucket ||
+      (candidate.dataset.todoList ?? "") !== listName ||
+      (candidate.dataset.todoSection ?? "") !== sectionName
+    ) {
+      return null;
+    }
+    return candidate.dataset.todoId ?? null;
+  }
+  return null;
+}
+
+function resolveBeforeId(
+  target: DropTarget,
+  draggingIds: readonly string[],
+  grouped: boolean,
+): string | null {
+  if (target.beforeId === null || !draggingIds.includes(target.beforeId)) return target.beforeId;
+  const rows = [...document.querySelectorAll<HTMLElement>("[data-todo-row]")];
+  const index = rows.findIndex((row) => row.dataset.todoId === target.beforeId);
+  for (let cursor = index + 1; cursor < rows.length; cursor += 1) {
+    const candidate = rows[cursor]!;
+    if (candidate.dataset.todoBucket !== target.bucket) return null;
+    if (
+      grouped &&
+      ((candidate.dataset.todoList ?? "") !== target.listName ||
+        (candidate.dataset.todoSection ?? "") !== target.sectionName)
+    ) {
+      return null;
+    }
+    const id = candidate.dataset.todoId;
+    if (id && !draggingIds.includes(id)) return id;
+  }
+  return null;
+}
+
 function PlusIcon() {
   return (
     <svg viewBox="0 0 16 16" aria-hidden="true" className="h-4 w-4">
@@ -216,6 +356,20 @@ function PlayIcon() {
   return (
     <svg viewBox="0 0 12 12" aria-hidden="true" className="h-3 w-3">
       <path d="M3.2 1.8v8.4L10 6 3.2 1.8Z" fill="currentColor" />
+    </svg>
+  );
+}
+
+function GripIcon() {
+  return (
+    <svg viewBox="0 0 12 12" aria-hidden="true" className="h-3.5 w-3">
+      <path
+        d="M4 2.25h.01M8 2.25h.01M4 6h.01M8 6h.01M4 9.75h.01M8 9.75h.01"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }
@@ -814,12 +968,14 @@ function LogEntry({ log }: { log: TodoLogEntry }) {
 function TodoDetails({
   item,
   listNames,
+  hideNotes,
   onChanged,
   onError,
   onCollapse,
 }: {
   item: TodoItem;
   listNames: string[];
+  hideNotes: boolean;
   onChanged(): void;
   onError(message: string): void;
   onCollapse(): void;
@@ -956,15 +1112,17 @@ function TodoDetails({
         }
       }}
     >
-      <textarea
-        aria-label={`备注 ${item.id}`}
-        value={notes}
-        rows={3}
-        maxLength={20000}
-        placeholder="添加备注"
-        onChange={(event) => setNotes(event.target.value)}
-        className="block max-h-[65dvh] min-h-10 w-full resize-y rounded-md border-0 bg-transparent px-1 py-1 text-base leading-relaxed text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [field-sizing:content] sm:text-sm"
-      />
+      {hideNotes ? null : (
+        <textarea
+          aria-label={`备注 ${item.id}`}
+          value={notes}
+          rows={3}
+          maxLength={20000}
+          placeholder="添加备注"
+          onChange={(event) => setNotes(event.target.value)}
+          className="block max-h-[65dvh] min-h-10 w-full resize-y rounded-md border-0 bg-transparent px-1 py-1 text-base leading-relaxed text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [field-sizing:content] sm:text-sm"
+        />
+      )}
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <button type="button" disabled={saving || !dirty} onClick={() => void save()} className={primaryButtonClassName}>
           {saving ? "保存中…" : "保存"}
@@ -1074,9 +1232,14 @@ function TodoRow({
   hasSuggestion,
   expanded,
   divider,
+  selected,
+  dragging,
+  dropBefore,
   onToggle,
   onShowThreads,
   onInsertAfter,
+  onRangeSelect,
+  onDragStart,
   onChanged,
   onError,
 }: {
@@ -1086,9 +1249,14 @@ function TodoRow({
   hasSuggestion: boolean;
   expanded: boolean;
   divider: boolean;
+  selected: boolean;
+  dragging: boolean;
+  dropBefore: boolean;
   onToggle(): void;
   onShowThreads(): void;
   onInsertAfter(): void;
+  onRangeSelect(id: string, event: ReactMouseEvent): void;
+  onDragStart(item: TodoItem, event: ReactPointerEvent<HTMLButtonElement>): void;
   onChanged(): void;
   onError(message: string): void;
 }) {
@@ -1097,10 +1265,14 @@ function TodoRow({
   const [busy, setBusy] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState(item.title);
+  const [draftNotes, setDraftNotes] = useState(item.notes);
   const [optimisticTitle, setOptimisticTitle] = useState<string | null>(null);
   const titleInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const notesInputRef = useRef<HTMLTextAreaElement | null>(null);
   const titleComposing = useRef(false);
+  const notesComposing = useRef(false);
   const titleEditSettled = useRef(false);
+  const movingWithinEditor = useRef(false);
   const detailsId = `todo-details-${item.id}`;
   const completed = item.completedAt !== null;
   const checked = completed || pendingCompleted;
@@ -1111,6 +1283,11 @@ function TodoRow({
     // A realtime refresh or the post-save snapshot now owns the title.
     setOptimisticTitle(null);
   }, [item.title]);
+
+  useEffect(() => {
+    if (editingTitle) return;
+    setDraftNotes(item.notes);
+  }, [editingTitle, item.notes]);
 
   const resizeTitleInput = () => {
     const element = titleInputRef.current;
@@ -1134,44 +1311,101 @@ function TodoRow({
     if (editingTitle) resizeTitleInput();
   }, [draftTitle, editingTitle]);
 
+  const resizeNotesInput = () => {
+    const element = notesInputRef.current;
+    if (!element) return;
+    element.style.height = "auto";
+    const nextHeight = element.scrollHeight;
+    element.style.height = nextHeight > 0 ? `${nextHeight}px` : "";
+  };
+
+  useEffect(() => {
+    if (editingTitle) resizeNotesInput();
+  }, [draftNotes, editingTitle]);
+
+  const focusNotes = () => {
+    const element = notesInputRef.current;
+    if (!element) return;
+    movingWithinEditor.current = true;
+    element.focus();
+    element.setSelectionRange(0, element.value.length);
+    movingWithinEditor.current = false;
+  };
+
+  const focusTitle = () => {
+    const element = titleInputRef.current;
+    if (!element) return;
+    movingWithinEditor.current = true;
+    element.focus();
+    const end = element.value.length;
+    element.setSelectionRange(end, end);
+    movingWithinEditor.current = false;
+  };
+
+  const editorKeepsFocus = (next: EventTarget | null) =>
+    next === titleInputRef.current || next === notesInputRef.current;
+
   const beginTitleEdit = () => {
     titleEditSettled.current = false;
     titleComposing.current = false;
+    notesComposing.current = false;
     setDraftTitle(item.title);
+    setDraftNotes(item.notes);
     setEditingTitle(true);
   };
 
-  const commitTitle = () => {
+  const finishEditing = () => {
     if (titleEditSettled.current) return;
     titleEditSettled.current = true;
     const trimmed = draftTitle.trim();
+    const titleChanged = trimmed.length > 0 && trimmed !== item.title;
+    const notesChanged = draftNotes !== item.notes;
     setEditingTitle(false);
-    if (trimmed.length === 0 || trimmed === item.title) {
+    if (!titleChanged && !notesChanged) {
       setDraftTitle(item.title);
+      setDraftNotes(item.notes);
       return;
     }
-    setOptimisticTitle(trimmed);
-    void rpc.call("update", { id: item.id, title: trimmed }).then(
-      () => {
-        onChanged();
-      },
-      () => {
-        setOptimisticTitle(null);
-        onError(`没能保存 ${item.id} 的标题。`);
-      },
-    );
+    if (trimmed.length === 0) setDraftTitle(item.title);
+    if (titleChanged) setOptimisticTitle(trimmed);
+    void rpc
+      .call("update", {
+        id: item.id,
+        ...(titleChanged ? { title: trimmed } : {}),
+        ...(notesChanged ? { notes: draftNotes } : {}),
+      })
+      .then(
+        () => {
+          onChanged();
+        },
+        () => {
+          setOptimisticTitle(null);
+          onError(`没能保存 ${item.id}。`);
+        },
+      );
   };
 
   const cancelTitleEdit = () => {
     titleEditSettled.current = true;
     setDraftTitle(item.title);
+    setDraftNotes(item.notes);
     setEditingTitle(false);
     titleInputRef.current?.blur();
+  };
+
+  const onEditorBlur = (event: ReactFocusEvent<HTMLTextAreaElement>) => {
+    if (movingWithinEditor.current || editorKeepsFocus(event.relatedTarget)) return;
+    finishEditing();
   };
 
   const onTitleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     // Enter that confirms an IME candidate belongs to the IME, never to save.
     if (titleComposing.current || event.nativeEvent.isComposing) return;
+    if (event.key === "Tab" && !event.shiftKey) {
+      event.preventDefault();
+      focusNotes();
+      return;
+    }
     if (event.key === "Escape") {
       event.preventDefault();
       cancelTitleEdit();
@@ -1179,8 +1413,21 @@ function TodoRow({
     }
     if (event.key !== "Enter" || event.shiftKey) return;
     event.preventDefault();
-    commitTitle();
+    finishEditing();
     onInsertAfter();
+  };
+
+  const onNotesKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (notesComposing.current || event.nativeEvent.isComposing) return;
+    if (event.key === "Tab" && event.shiftKey) {
+      event.preventDefault();
+      focusTitle();
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelTitleEdit();
+    }
   };
 
   const toggleCompleted = async () => {
@@ -1198,7 +1445,14 @@ function TodoRow({
     }
   };
 
+  const modifierSelect = (event: ReactMouseEvent) =>
+    event.shiftKey || event.metaKey || event.ctrlKey;
+
   const onSurfaceClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (modifierSelect(event)) {
+      onRangeSelect(item.id, event);
+      return;
+    }
     const target = event.target as HTMLElement;
     if (target.closest("button, a, input, select, textarea, label")) return;
     onToggle();
@@ -1208,14 +1462,36 @@ function TodoRow({
     <div
       className={divider ? "border-t border-border" : undefined}
       data-todo-row
+      data-todo-id={item.id}
+      data-todo-bucket={item.bucket}
+      data-todo-list={item.listName}
+      data-todo-section={item.sectionName}
+      data-selected={selected ? "true" : "false"}
+      aria-selected={selected}
       title={`${item.id} ${item.title}`}
     >
+      {dropBefore ? <div aria-hidden="true" className="h-0.5 bg-primary" /> : null}
       <div
         onClick={onSurfaceClick}
-        className={`group flex items-start gap-2.5 px-2.5 pt-2.5 transition-colors sm:px-3.5 ${
-          expanded ? "bg-card" : "pb-2.5 hover:bg-accent"
-        }`}
+        className={`group flex items-start gap-1.5 px-2 pt-2.5 transition-colors sm:px-2.5 ${
+          expanded ? "bg-card" : selected ? "bg-accent pb-2.5" : "pb-2.5 hover:bg-accent"
+        } ${dragging ? "opacity-40" : ""}`}
       >
+        <button
+          type="button"
+          aria-label={`拖动 ${item.id}`}
+          title="拖动调整位置"
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            event.stopPropagation();
+            onDragStart(item, event);
+          }}
+          onClick={(event) => event.stopPropagation()}
+          className="mt-0.5 flex h-5 w-4 shrink-0 touch-none cursor-grab appearance-none items-center justify-center rounded border-0 bg-transparent p-0 text-muted-foreground/70 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
+        >
+          <GripIcon />
+        </button>
         <button
           type="button"
           role="checkbox"
@@ -1224,6 +1500,10 @@ function TodoRow({
           disabled={busy}
           onClick={(event) => {
             event.stopPropagation();
+            if (modifierSelect(event)) {
+              onRangeSelect(item.id, event);
+              return;
+            }
             void toggleCompleted();
           }}
           style={checkStyle(color, checked)}
@@ -1254,10 +1534,7 @@ function TodoRow({
                   titleComposing.current = false;
                 }}
                 onKeyDown={onTitleKeyDown}
-                onBlur={() => {
-                  if (titleEditSettled.current) return;
-                  commitTitle();
-                }}
+                onBlur={onEditorBlur}
                 className="block min-w-0 flex-1 resize-none overflow-hidden rounded-none border-0 border-b border-primary/35 bg-transparent p-0 text-base font-medium leading-5 text-foreground outline-none transition-colors focus:border-primary focus:bg-muted/30 focus:outline-none sm:text-sm"
               />
             ) : (
@@ -1267,6 +1544,10 @@ function TodoRow({
                 title={`${item.id} ${item.title}`}
                 onClick={(event) => {
                   event.stopPropagation();
+                  if (modifierSelect(event)) {
+                    onRangeSelect(item.id, event);
+                    return;
+                  }
                   beginTitleEdit();
                 }}
                 className="min-w-0 max-w-full touch-manipulation cursor-text appearance-none break-words border-0 bg-transparent p-0 text-left text-sm font-medium leading-5 text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -1294,7 +1575,26 @@ function TodoRow({
               </span>
             ) : null}
           </div>
-          {!expanded && item.notes.trim() ? (
+          {editingTitle ? (
+            <textarea
+              ref={notesInputRef}
+              aria-label={`编辑备注 ${item.id}`}
+              rows={1}
+              value={draftNotes}
+              maxLength={20000}
+              placeholder="添加备注"
+              onChange={(event) => setDraftNotes(event.target.value)}
+              onCompositionStart={() => {
+                notesComposing.current = true;
+              }}
+              onCompositionEnd={() => {
+                notesComposing.current = false;
+              }}
+              onKeyDown={onNotesKeyDown}
+              onBlur={onEditorBlur}
+              className="mt-0.5 block min-w-0 w-full resize-none overflow-hidden border-0 bg-transparent p-0 text-sm leading-5 text-muted-foreground outline-none placeholder:text-muted-foreground/50"
+            />
+          ) : !expanded && item.notes.trim() ? (
             <p className="line-clamp-2 whitespace-pre-line break-words text-sm leading-5 text-muted-foreground">
               {item.notes}
             </p>
@@ -1325,6 +1625,7 @@ function TodoRow({
           <TodoDetails
             item={item}
             listNames={listNames}
+            hideNotes={editingTitle}
             onChanged={onChanged}
             onError={onError}
             onCollapse={onToggle}
@@ -1354,12 +1655,18 @@ function SectionHeading({
   count,
   color,
   collapsed,
+  dropEnd,
+  bucket,
+  listName,
   onToggle,
 }: {
   sectionName: string;
   count: number;
   color: TodoColor | null;
   collapsed: boolean;
+  dropEnd: boolean;
+  bucket: TodoFormalBucket;
+  listName: string;
   onToggle(): void;
 }) {
   return (
@@ -1367,7 +1674,17 @@ function SectionHeading({
       type="button"
       aria-expanded={!collapsed}
       onClick={onToggle}
-      className="flex w-full touch-manipulation cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      {...(collapsed
+        ? {
+            "data-todo-drop-end": "",
+            "data-todo-bucket": bucket,
+            "data-todo-list": listName,
+            "data-todo-section": sectionName,
+          }
+        : {})}
+      className={`flex w-full touch-manipulation cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+        dropEnd ? "shadow-[inset_0_-2px_0_0_var(--primary)]" : ""
+      }`}
     >
       <ChevronIcon open={!collapsed} />
       <span
@@ -1401,10 +1718,18 @@ type InlineInsertTarget =
 function BottomInsertRow({
   divider,
   label,
+  bucket,
+  listName,
+  sectionName,
+  dropEnd,
   onActivate,
 }: {
   divider: boolean;
   label: string;
+  bucket: TodoFormalBucket;
+  listName: string;
+  sectionName: string;
+  dropEnd: boolean;
   onActivate(): void;
 }) {
   return (
@@ -1412,10 +1737,14 @@ function BottomInsertRow({
       type="button"
       aria-label={label}
       title={label}
+      data-todo-drop-end=""
+      data-todo-bucket={bucket}
+      data-todo-list={listName}
+      data-todo-section={sectionName}
       onClick={onActivate}
       className={`group flex w-full touch-manipulation cursor-text appearance-none items-center gap-2.5 bg-transparent px-2.5 py-2.5 text-left transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-3.5 ${
         divider ? "border-t border-border" : ""
-      }`}
+      } ${dropEnd ? "shadow-[inset_0_2px_0_0_var(--primary)]" : ""}`}
     >
       <span
         aria-hidden="true"
@@ -1573,9 +1902,14 @@ function TodoSection({
   suggestedItemIds,
   expandedId,
   inlineInsert,
+  selectedIds,
+  draggingIds,
+  dropTarget,
   onToggleSection,
   onToggle,
   onShowThreads,
+  onRangeSelect,
+  onDragStart,
   onStartInlineAfter,
   onStartInlineBottom,
   onInlineSubmitted,
@@ -1592,9 +1926,14 @@ function TodoSection({
   suggestedItemIds: ReadonlySet<string>;
   expandedId: string | null;
   inlineInsert: InlineInsertTarget | null;
+  selectedIds: ReadonlySet<string>;
+  draggingIds: ReadonlySet<string>;
+  dropTarget: DropTarget | null;
   onToggleSection(key: string): void;
   onToggle(id: string): void;
   onShowThreads(id: string): void;
+  onRangeSelect(id: string, event: ReactMouseEvent): void;
+  onDragStart(item: TodoItem, event: ReactPointerEvent<HTMLButtonElement>): void;
   onStartInlineAfter(item: TodoItem): void;
   onStartInlineBottom(
     key: string,
@@ -1646,9 +1985,19 @@ function TodoSection({
         hasSuggestion={suggestedItemIds.has(item.id)}
         divider={offset + index > 0}
         expanded={expandedId === item.id}
+        selected={selectedIds.has(item.id)}
+        dragging={draggingIds.has(item.id)}
+        dropBefore={
+          dropTarget !== null &&
+          dropTarget.beforeId === item.id &&
+          sameDropGroup(dropTarget, item.bucket, item.listName, item.sectionName) &&
+          !draggingIds.has(item.id)
+        }
         onToggle={() => onToggle(item.id)}
         onShowThreads={() => onShowThreads(item.id)}
         onInsertAfter={() => onStartInlineAfter(item)}
+        onRangeSelect={onRangeSelect}
+        onDragStart={onDragStart}
         onChanged={onChanged}
         onError={onError}
       />,
@@ -1684,6 +2033,14 @@ function TodoSection({
         key={`bottom-${groupKey}`}
         divider={divider}
         label="在底部添加待办"
+        bucket={bucket}
+        listName={listName}
+        sectionName={sectionName}
+        dropEnd={
+          dropTarget !== null &&
+          dropTarget.beforeId === null &&
+          sameDropGroup(dropTarget, bucket, listName, sectionName)
+        }
         onActivate={() => onStartInlineBottom(groupKey, bucket, listName, sectionName, lastItem?.id)}
       />
     );
@@ -1718,6 +2075,14 @@ function TodoSection({
                     count={rows.length}
                     color={color}
                     collapsed={collapsed}
+                    bucket={bucket}
+                    listName={listName}
+                    dropEnd={
+                      collapsed &&
+                      dropTarget !== null &&
+                      dropTarget.beforeId === null &&
+                      sameDropGroup(dropTarget, bucket, listName, sectionName)
+                    }
                     onToggle={() => onToggleSection(key)}
                   />
                   {collapsed ? null : (
@@ -2151,6 +2516,11 @@ function TodoPanel(_props: PluginNavPanelProps) {
   const [revision, setRevision] = useState(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [inlineInsert, setInlineInsert] = useState<InlineInsertTarget | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [draggingIds, setDraggingIds] = useState<string[]>([]);
+  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
+  const anchorId = useRef<string | null>(null);
+  const dragListeners = useRef<(() => void) | null>(null);
   const initialViewState = useRef<TodoViewState | null>(null);
   if (initialViewState.current === null) initialViewState.current = readViewState();
   const initialView = initialViewState.current;
@@ -2214,6 +2584,161 @@ function TodoPanel(_props: PluginNavPanelProps) {
   const report = useCallback((message: string) => {
     setActionError(message);
   }, []);
+
+  const selectedSet = new Set(selectedIds);
+  const draggingSet = new Set(draggingIds);
+
+  useEffect(() => {
+    if (snapshot === null) return;
+    const visible = new Set(visibleTodoIds(snapshot, listFilter, groupByList, collapsedSections));
+    setSelectedIds((current) => {
+      const next = current.filter((id) => visible.has(id));
+      return next.length === current.length ? current : next;
+    });
+    if (anchorId.current !== null && !visible.has(anchorId.current)) anchorId.current = null;
+  }, [collapsedSections, groupByList, listFilter, snapshot]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      const target = event.target;
+      if (target instanceof HTMLElement && target.closest("textarea, input, select")) return;
+      if (dragListeners.current) {
+        dragListeners.current();
+        dragListeners.current = null;
+        setDraggingIds([]);
+        setDropTarget(null);
+      }
+      setSelectedIds([]);
+      anchorId.current = null;
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  useEffect(() => () => dragListeners.current?.(), []);
+
+  const orderedSelection = useCallback(
+    (ids: Iterable<string>) => {
+      if (snapshot === null) return [...ids];
+      const wanted = new Set(ids);
+      return visibleTodoIds(snapshot, listFilter, groupByList, collapsedSections).filter((id) => wanted.has(id));
+    },
+    [collapsedSections, groupByList, listFilter, snapshot],
+  );
+
+  const onRangeSelect = (id: string, event: ReactMouseEvent) => {
+    if (snapshot === null) return;
+    const order = visibleTodoIds(snapshot, listFilter, groupByList, collapsedSections);
+    if (event.shiftKey && anchorId.current) {
+      const start = order.indexOf(anchorId.current);
+      const end = order.indexOf(id);
+      if (start >= 0 && end >= 0) {
+        const [from, to] = start < end ? [start, end] : [end, start];
+        setSelectedIds(order.slice(from, to + 1));
+        return;
+      }
+    }
+    if (event.metaKey || event.ctrlKey) {
+      const next = new Set(selectedIds);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      setSelectedIds(order.filter((itemId) => next.has(itemId)));
+      anchorId.current = id;
+      return;
+    }
+    setSelectedIds([id]);
+    anchorId.current = id;
+  };
+
+  const runBatch = async (action: "complete" | "delete" | "move", bucket?: TodoFormalBucket) => {
+    const ids = orderedSelection(selectedIds);
+    if (ids.length === 0) return;
+    try {
+      await rpc.call("batch", { ids, action, ...(bucket ? { bucket } : {}) });
+      setSelectedIds([]);
+      anchorId.current = null;
+      refresh();
+    } catch {
+      report(
+        action === "delete" ? "没能删除所选待办。" : action === "complete" ? "没能完成所选待办。" : "没能移动所选待办。",
+      );
+    }
+  };
+
+  const onDragStart = (item: TodoItem, event: ReactPointerEvent<HTMLButtonElement>) => {
+    dragListeners.current?.();
+    const ids =
+      selectedSet.has(item.id) && snapshot !== null
+        ? orderedSelection(selectedIds)
+        : [item.id];
+    const draggedBuckets = new Set(
+      ids.map((id) => {
+        for (const bucket of FORMAL_BUCKETS) {
+          if (snapshot?.buckets[bucket].some((row) => row.id === id)) return bucket;
+        }
+        return item.bucket;
+      }),
+    );
+    const originX = event.clientX;
+    const originY = event.clientY;
+    let armed = false;
+    let latest: DropTarget | null = null;
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+      document.body.style.userSelect = "";
+    };
+    const move = (pointer: PointerEvent) => {
+      if (pointer.pointerId !== event.pointerId) return;
+      if (!armed) {
+        if (Math.hypot(pointer.clientX - originX, pointer.clientY - originY) < 4) return;
+        armed = true;
+        document.body.style.userSelect = "none";
+        setDraggingIds(ids);
+      }
+      const next = readDropTarget(pointer.clientX, pointer.clientY, listFilter !== null || groupByList);
+      latest = next;
+      setDropTarget((current) =>
+        current?.bucket === next?.bucket &&
+        current?.listName === next?.listName &&
+        current?.sectionName === next?.sectionName &&
+        current?.beforeId === next?.beforeId
+          ? current
+          : next,
+      );
+    };
+    const finish = (pointer: PointerEvent) => {
+      if (pointer.pointerId !== event.pointerId) return;
+      stop();
+      dragListeners.current = null;
+      setDraggingIds([]);
+      setDropTarget(null);
+      if (!armed || latest === null) return;
+      const grouped = listFilter !== null || groupByList;
+      if (!grouped && (draggedBuckets.size !== 1 || !draggedBuckets.has(latest.bucket))) return;
+      const beforeId = resolveBeforeId(latest, ids, grouped);
+      if (latest.beforeId !== null && ids.includes(latest.beforeId) && beforeId === null) return;
+      void rpc
+        .call("reorder", {
+          ids,
+          ...(beforeId ? { beforeId } : {}),
+          bucket: latest.bucket,
+          ...(grouped ? { listName: latest.listName, sectionName: latest.sectionName } : {}),
+        })
+        .then(
+          (result) => {
+            if (result.changed) refresh();
+          },
+          () => report("没能调整顺序。"),
+        );
+    };
+    dragListeners.current = stop;
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+  };
 
   const formalItems = snapshot
     ? [...snapshot.buckets.focus, ...snapshot.buckets.later, ...snapshot.buckets.waiting]
@@ -2306,6 +2831,41 @@ function TodoPanel(_props: PluginNavPanelProps) {
               onChanged={refresh}
               onError={report}
             />
+            {selectedIds.length > 0 ? (
+              <div
+                role="toolbar"
+                aria-label="批量操作"
+                className="sticky top-0 z-10 flex flex-wrap items-center gap-1.5 rounded-xl border border-border bg-card px-2.5 py-2"
+              >
+                <span className="mr-1 text-xs font-medium text-foreground">已选 {selectedIds.length}</span>
+                <button type="button" className={primaryButtonClassName} onClick={() => void runBatch("complete")}>
+                  完成所选
+                </button>
+                {FORMAL_BUCKETS.map((bucket) => (
+                  <button
+                    key={bucket}
+                    type="button"
+                    className={quietButtonClassName}
+                    onClick={() => void runBatch("move", bucket)}
+                  >
+                    移到 {BUCKET_LABEL[bucket]}
+                  </button>
+                ))}
+                <button type="button" className={quietButtonClassName} onClick={() => void runBatch("delete")}>
+                  删除所选
+                </button>
+                <button
+                  type="button"
+                  className={quietButtonClassName}
+                  onClick={() => {
+                    setSelectedIds([]);
+                    anchorId.current = null;
+                  }}
+                >
+                  取消选择
+                </button>
+              </div>
+            ) : null}
             {nothingOpen ? (
               <EmptyState />
             ) : (
@@ -2325,6 +2885,11 @@ function TodoPanel(_props: PluginNavPanelProps) {
                     suggestedItemIds={new Set(snapshot.suggestions.map((suggestion) => suggestion.itemId))}
                     expandedId={expandedId}
                     inlineInsert={inlineInsert}
+                    selectedIds={selectedSet}
+                    draggingIds={draggingSet}
+                    dropTarget={dropTarget}
+                    onRangeSelect={onRangeSelect}
+                    onDragStart={onDragStart}
                     onToggleSection={(key) => {
                       setCollapsedSections((current) => {
                         const next = new Set(current);

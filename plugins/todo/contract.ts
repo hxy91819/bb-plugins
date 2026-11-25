@@ -261,6 +261,95 @@ export const updateTodoInput = z.object({
   sortOrder: z.number().optional(),
 });
 
+const todoIdListSchema = z.array(todoIdSchema).min(1).max(100);
+
+function duplicateTodoIds(ids: string[]): boolean {
+  const seqs = ids.map((id) => parseTodoId(id));
+  return seqs.some((seq) => seq === null) || new Set(seqs).size !== seqs.length;
+}
+
+/**
+ * Move formal todos as one block in destination-bucket order. `beforeId`
+ * inserts immediately before that row. Omit it to append to the bucket, or
+ * to the explicit list/section when those fields are set. Omitted list and
+ * section stay on each todo; pass them, including an empty string, to refile.
+ */
+export const reorderTodosInput = z
+  .object({
+    ids: todoIdListSchema,
+    beforeId: todoIdSchema.optional(),
+    bucket: todoFormalBucketSchema.optional(),
+    listName: todoListNameSchema.optional(),
+    sectionName: todoSectionNameSchema.optional(),
+  })
+  .superRefine((value, context) => {
+    if (duplicateTodoIds(value.ids)) {
+      context.addIssue({
+        code: "custom",
+        message: "Todo ids must be unique",
+        path: ["ids"],
+      });
+    }
+    const beforeSeq = value.beforeId === undefined ? null : parseTodoId(value.beforeId);
+    if (beforeSeq !== null && value.ids.some((id) => parseTodoId(id) === beforeSeq)) {
+      context.addIssue({
+        code: "custom",
+        message: "beforeId cannot be one of the moved todos",
+        path: ["beforeId"],
+      });
+    }
+  });
+
+export const reorderTodosOutput = z.object({
+  ids: z.array(z.string()),
+  changed: z.boolean(),
+  items: z.array(todoItemSchema),
+});
+
+export const batchTodoActionSchema = z.enum(["complete", "delete", "move"]);
+export type BatchTodoAction = z.infer<typeof batchTodoActionSchema>;
+
+/** One undoable write. `move` changes only the fields that are present. */
+export const batchTodosInput = z
+  .object({
+    ids: todoIdListSchema,
+    action: batchTodoActionSchema,
+    bucket: todoFormalBucketSchema.optional(),
+    listName: todoListNameSchema.optional(),
+    sectionName: todoSectionNameSchema.optional(),
+  })
+  .superRefine((value, context) => {
+    if (duplicateTodoIds(value.ids)) {
+      context.addIssue({
+        code: "custom",
+        message: "Todo ids must be unique",
+        path: ["ids"],
+      });
+    }
+    const placing =
+      value.bucket !== undefined || value.listName !== undefined || value.sectionName !== undefined;
+    if (value.action === "move" && !placing) {
+      context.addIssue({
+        code: "custom",
+        message: "Moving requires a bucket, list, or section",
+        path: ["bucket"],
+      });
+    }
+    if (value.action !== "move" && placing) {
+      context.addIssue({
+        code: "custom",
+        message: "bucket, listName, and sectionName are only valid when action is move",
+        path: ["bucket"],
+      });
+    }
+  });
+
+export const batchTodosOutput = z.object({
+  action: batchTodoActionSchema,
+  ids: z.array(z.string()),
+  changed: z.boolean(),
+});
+
 export const setTodoCompletedInput = z.object({
   id: todoIdSchema,
   completed: z.boolean(),
@@ -469,6 +558,14 @@ export const rpcContract = defineRpcContract({
   update: {
     input: updateTodoInput,
     output: todoItemSchema,
+  },
+  reorder: {
+    input: reorderTodosInput,
+    output: reorderTodosOutput,
+  },
+  batch: {
+    input: batchTodosInput,
+    output: batchTodosOutput,
   },
   setCompleted: {
     input: setTodoCompletedInput,

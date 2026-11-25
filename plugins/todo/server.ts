@@ -29,7 +29,11 @@ import {
   parseSuggestionId,
   parseTodoId,
   prepareStartSessionOutput,
+  batchTodosInput,
+  batchTodosOutput,
   quickAddInput,
+  reorderTodosInput,
+  reorderTodosOutput,
   resolveSuggestionInput,
   resolveTodoPlacement,
   rpcContract,
@@ -159,6 +163,40 @@ function parseCli<T>(schema: z.ZodType<T>, value: unknown): T {
         ? `Check ${path.map((part) => `--${part}`).join(", ")}.`
         : "Run `bb todo --help` for command syntax.",
   });
+}
+
+type SortSlot = {
+  seq: number;
+  sort_order: number;
+};
+
+function ordersBetween(
+  prev: number | null,
+  next: number | null,
+  count: number,
+): number[] | null {
+  if (count === 0) return [];
+  if (prev === null && next === null) return Array.from({ length: count }, (_, index) => index);
+  if (prev === null && next !== null) {
+    return Array.from({ length: count }, (_, index) => next - (count - index));
+  }
+  if (prev !== null && next === null) {
+    return Array.from({ length: count }, (_, index) => prev + index + 1);
+  }
+  const lower = prev ?? 0;
+  const upper = next ?? lower;
+  const step = (upper - lower) / (count + 1);
+  const orders = Array.from({ length: count }, (_, index) => lower + step * (index + 1));
+  const fits = orders.every(
+    (value, index) => value > lower && value < upper && (index === 0 || value > orders[index - 1]!),
+  );
+  return fits ? orders : null;
+}
+
+function formatIdList(seqs: number[]): string {
+  const ids = seqs.map((seq) => formatTodoId(seq));
+  if (ids.length <= 3) return ids.join("、");
+  return `${ids.slice(0, 3).join("、")} 等 ${ids.length} 项`;
 }
 
 function cliTodoId(raw: string): string {
@@ -1214,6 +1252,291 @@ export default function plugin(bb: BbPluginApi): void {
     return (await readEnrichedItem(seq))!;
   };
 
+  const openOrderRows = (
+    bucket: string,
+  ): Array<SortSlot & { list_name: string; section_name: string }> =>
+    db
+      .prepare(
+        `SELECT seq, sort_order, list_name, section_name FROM todo_items
+         WHERE completed_at IS NULL AND bucket = ? AND ${activeSql}
+         ORDER BY sort_order ASC, seq ASC`,
+      )
+      .all(bucket) as Array<SortSlot & { list_name: string; section_name: string }>;
+
+  const requireOpenFormal = (seq: number): ItemRow => {
+    const row = requireItemRow(seq);
+    if (row.bucket === "inbox") {
+      throw new TodoError(
+        `${formatTodoId(seq)} is an inbox proposal`,
+        "not_editable",
+        "Accept, merge, or dismiss it with `bb todo triage` first.",
+      );
+    }
+    if (row.completed_at !== null) {
+      throw new TodoError(
+        `${formatTodoId(seq)} is completed`,
+        "already_completed",
+        "Reopen it before reordering or batch-editing it.",
+      );
+    }
+    return row;
+  };
+
+  const placeTodos = async (
+    input: z.infer<typeof reorderTodosInput>,
+    actor: string,
+  ): Promise<z.infer<typeof reorderTodosOutput>> => {
+    const seqs = input.ids.map((id) => mustParseId(id));
+    if (new Set(seqs).size !== seqs.length) {
+      throw new TodoError("Todo ids must be unique", "invalid_input", "Pass each todo once.");
+    }
+    const movers = seqs.map((seq) => requireOpenFormal(seq));
+    const beforeRow = input.beforeId === undefined ? null : requireItemRow(mustParseId(input.beforeId));
+    const bucket = input.bucket ?? beforeRow?.bucket ?? movers[0]!.bucket;
+    if (bucket === "inbox") {
+      throw new TodoError(
+        "Inbox is not a reorder destination",
+        "not_editable",
+        "Accept the proposal before ordering it.",
+      );
+    }
+    if (
+      beforeRow &&
+      (beforeRow.completed_at !== null ||
+        beforeRow.bucket !== bucket ||
+        (input.listName !== undefined && beforeRow.list_name !== input.listName) ||
+        (input.sectionName !== undefined && beforeRow.section_name !== input.sectionName))
+    ) {
+      throw new TodoError(
+        `${formatTodoId(beforeRow.seq)} is not in the destination group`,
+        "invalid_target",
+        "Choose a --before todo in the destination bucket, list, and section.",
+      );
+    }
+
+    const movingSeqs = new Set(seqs);
+    const timestamp = now();
+    const changed = db.transaction(() => {
+      const staying = openOrderRows(bucket).filter((row) => !movingSeqs.has(row.seq));
+      let insertAt = staying.length;
+      if (beforeRow) {
+        insertAt = staying.findIndex((row) => row.seq === beforeRow.seq);
+        if (insertAt < 0) {
+          throw new TodoError(
+            `${formatTodoId(beforeRow.seq)} is not in the destination group`,
+            "invalid_target",
+            "Choose a --before todo in the destination bucket, list, and section.",
+          );
+        }
+      } else if (input.listName !== undefined || input.sectionName !== undefined) {
+        const listName = input.listName !== undefined ? input.listName : movers[0]!.list_name;
+        const sectionName = input.sectionName !== undefined ? input.sectionName : movers[0]!.section_name;
+        let lastSibling = -1;
+        let lastInList = -1;
+        staying.forEach((row, index) => {
+          if (row.list_name === listName) lastInList = index;
+          if (row.list_name === listName && row.section_name === sectionName) lastSibling = index;
+        });
+        if (lastSibling >= 0) insertAt = lastSibling + 1;
+        else if (lastInList >= 0) insertAt = lastInList + 1;
+        else insertAt = staying.length;
+      }
+      const nextList = (row: ItemRow) => (input.listName !== undefined ? input.listName : row.list_name);
+      const nextSection = (row: ItemRow) =>
+        input.sectionName !== undefined ? input.sectionName : row.section_name;
+      const planned = [
+        ...staying.slice(0, insertAt).map((row) => row.seq),
+        ...seqs,
+        ...staying.slice(insertAt).map((row) => row.seq),
+      ];
+      const current = openOrderRows(bucket).map((row) => row.seq);
+      const fieldsUnchanged = movers.every(
+        (row) => row.bucket === bucket && row.list_name === nextList(row) && row.section_name === nextSection(row),
+      );
+      if (fieldsUnchanged && movers.every((row) => row.bucket === bucket) && current.join(",") === planned.join(",")) {
+        return false;
+      }
+
+      const prev = insertAt === 0 ? null : staying[insertAt - 1]!;
+      const next = insertAt >= staying.length ? null : staying[insertAt]!;
+      let orders = ordersBetween(prev?.sort_order ?? null, next?.sort_order ?? null, movers.length);
+      const rebalancedBefore =
+        orders === null
+          ? staying
+              .map((row) => captureBundle(row.seq))
+              .filter((bundle): bundle is NonNullable<typeof bundle> => bundle !== null)
+          : [];
+      if (orders === null) {
+        const updateOrder = db.prepare("UPDATE todo_items SET sort_order = ? WHERE seq = ?");
+        staying.forEach((row, index) => updateOrder.run(index + 1, row.seq));
+        const prevOrder = prev === null ? null : staying.findIndex((row) => row.seq === prev.seq) + 1;
+        const nextOrder = next === null ? null : staying.findIndex((row) => row.seq === next.seq) + 1;
+        orders = ordersBetween(prevOrder, nextOrder, movers.length);
+        if (orders === null) {
+          throw new TodoError("Could not place those todos", "invalid_input", "Try the move again.");
+        }
+      }
+      const placed = orders;
+      const movedBefore = movers.map((row) => captureBundle(row.seq)!);
+      const update = db.prepare(
+        `UPDATE todo_items
+         SET bucket = ?, list_name = ?, section_name = ?, sort_order = ?, updated_at = ?
+         WHERE seq = ?`,
+      );
+      movers.forEach((row, index) => {
+        update.run(bucket, nextList(row), nextSection(row), placed[index], timestamp, row.seq);
+      });
+      const listName = input.listName !== undefined ? input.listName : "";
+      if (listName.length > 0) ensureListColor(listName);
+      const touched = [...seqs, ...rebalancedBefore.map((bundle) => bundle.item.seq)];
+      writeRevision({
+        seq: movers[0]!.seq,
+        action: "update",
+        actor,
+        summary: `调整顺序 ${formatIdList(seqs)}`,
+        before: [...movedBefore, ...rebalancedBefore],
+        after: touched.map((seq) => captureBundle(seq)!),
+        timestamp,
+      });
+      return true;
+    })();
+
+    if (changed) publishChanged("reordered", movers[0]!.seq);
+    const items: TodoItem[] = [];
+    for (const seq of seqs) {
+      const item = await readEnrichedItem(seq);
+      if (item) items.push(item);
+    }
+    return { ids: items.map((item) => item.id), changed, items };
+  };
+
+  const batchTodos = async (
+    input: z.infer<typeof batchTodosInput>,
+    actor: string,
+  ): Promise<z.infer<typeof batchTodosOutput>> => {
+    const seqs = input.ids.map((id) => mustParseId(id));
+    if (new Set(seqs).size !== seqs.length) {
+      throw new TodoError("Todo ids must be unique", "invalid_input", "Pass each todo once.");
+    }
+    const rows = seqs.map((seq) => requireItemRow(seq));
+    for (const row of rows) {
+      if (row.bucket === "inbox") {
+        throw new TodoError(
+          `${formatTodoId(row.seq)} is an inbox proposal`,
+          "not_editable",
+          "Accept, merge, or dismiss it with `bb todo triage` first.",
+        );
+      }
+      if (input.action !== "delete" && row.completed_at !== null) {
+        throw new TodoError(
+          `${formatTodoId(row.seq)} is completed`,
+          "already_completed",
+          "Reopen it before completing or moving it again.",
+        );
+      }
+    }
+
+    const timestamp = now();
+    const changed = db.transaction(() => {
+      if (input.action === "complete") {
+        const before = rows.map((row) => captureBundle(row.seq)!);
+        const mark = db.prepare("UPDATE todo_items SET completed_at = ?, updated_at = ? WHERE seq = ?");
+        for (const row of rows) mark.run(timestamp, timestamp, row.seq);
+        const placeholders = rows.map(() => "?").join(", ");
+        db.prepare(
+          `UPDATE todo_suggestions SET status = 'dismissed', resolved_at = ?
+           WHERE status = 'pending' AND kind = 'complete' AND item_seq IN (${placeholders})`,
+        ).run(timestamp, ...seqs);
+        writeRevision({
+          seq: rows[0]!.seq,
+          action: "complete",
+          actor,
+          summary: `勾选完成 ${formatIdList(seqs)}`,
+          before,
+          after: rows.map((row) => captureBundle(row.seq)!),
+          timestamp,
+        });
+        return true;
+      }
+      if (input.action === "delete") {
+        const before = rows.map((row) => captureBundle(row.seq)!);
+        for (const row of rows) softDelete(row.seq, timestamp);
+        const placeholders = rows.map(() => "?").join(", ");
+        db.prepare(
+          `UPDATE todo_suggestions SET status = 'dismissed', resolved_at = ?
+           WHERE status = 'pending' AND item_seq IN (${placeholders})`,
+        ).run(timestamp, ...seqs);
+        writeRevision({
+          seq: rows[0]!.seq,
+          action: "delete",
+          actor,
+          summary: `删除 ${formatIdList(seqs)}`,
+          before,
+          after: rows.map((row) => captureBundle(row.seq)!),
+          timestamp,
+        });
+        return true;
+      }
+
+      const plans = rows.map((row) => ({
+        row,
+        bucket: input.bucket ?? row.bucket,
+        listName: input.listName !== undefined ? input.listName : row.list_name,
+        sectionName: input.sectionName !== undefined ? input.sectionName : row.section_name,
+      }));
+      const affected = plans.filter(
+        (plan) =>
+          plan.bucket !== plan.row.bucket ||
+          plan.listName !== plan.row.list_name ||
+          plan.sectionName !== plan.row.section_name,
+      );
+      if (affected.length === 0) return false;
+      const arrivals = affected.filter((plan) => plan.bucket !== plan.row.bucket);
+      const sortCursor = new Map<string, number>();
+      for (const bucket of new Set(arrivals.map((plan) => plan.bucket))) {
+        const staying = openOrderRows(bucket);
+        sortCursor.set(bucket, staying.length === 0 ? -1 : staying[staying.length - 1]!.sort_order);
+      }
+      const before = affected.map((plan) => captureBundle(plan.row.seq)!);
+      const update = db.prepare(
+        `UPDATE todo_items
+         SET bucket = ?, list_name = ?, section_name = ?, sort_order = ?, updated_at = ?
+         WHERE seq = ?`,
+      );
+      for (const plan of affected) {
+        let sortOrder = plan.row.sort_order;
+        if (plan.bucket !== plan.row.bucket) {
+          const last = sortCursor.get(plan.bucket) ?? -1;
+          sortOrder = last + 1;
+          sortCursor.set(plan.bucket, sortOrder);
+        }
+        update.run(plan.bucket, plan.listName, plan.sectionName, sortOrder, timestamp, plan.row.seq);
+        if (plan.listName.length > 0) ensureListColor(plan.listName);
+      }
+      const where =
+        input.bucket ??
+        (input.listName !== undefined ? (input.listName.length > 0 ? input.listName : "未归类") : input.sectionName || "未分组");
+      writeRevision({
+        seq: affected[0]!.row.seq,
+        action: "update",
+        actor,
+        summary: `移动 ${formatIdList(affected.map((plan) => plan.row.seq))} 到 ${where}`,
+        before,
+        after: affected.map((plan) => captureBundle(plan.row.seq)!),
+        timestamp,
+      });
+      return true;
+    })();
+
+    if (changed) {
+      publishChanged(
+        input.action === "complete" ? "completed" : input.action === "delete" ? "removed" : "updated",
+        rows[0]!.seq,
+      );
+    }
+    return { action: input.action, ids: seqs.map((seq) => formatTodoId(seq)), changed };
+  };
+
   const setCompleted = async (
     id: string,
     completed: boolean,
@@ -2250,6 +2573,8 @@ export default function plugin(bb: BbPluginApi): void {
         },
         "ui",
       ),
+    reorder: (input) => placeTodos(input, "ui"),
+    batch: (input) => batchTodos(input, "ui"),
     setCompleted: (input) => setCompleted(input.id, input.completed, input.note, "ui"),
     triageInbox: (input) => triageInbox(input, "ui"),
     addLog: (input) => addLog(input),
@@ -2900,6 +3225,108 @@ export default function plugin(bb: BbPluginApi): void {
               ),
             );
             return reply(item, options.json, () => humanItemDetail(item));
+          },
+        }),
+
+        move: cliCommand({
+          summary: "Reorder formal todos, optionally into another list or section",
+          description:
+            "Places the ids, in the order given, immediately before --before in that bucket. Without --before they append to the bucket, or to the --list/--section group when those flags are set. Omitted list and section stay on each todo.",
+          positionals: [
+            {
+              name: "ids",
+              description: "Formal todo ids, kept in this order",
+              required: true,
+              variadic: true,
+            },
+          ],
+          options: {
+            before: {
+              type: "string",
+              description: "Insert before this todo. Omit to append.",
+            },
+            bucket: {
+              type: "enum",
+              values: ["focus", "later", "waiting"],
+              description: "Destination bucket. Defaults to the --before todo, or the first id.",
+            },
+            list: {
+              type: "string",
+              description: "Refile onto this project list. Omit to keep each todo's list. An empty string clears it.",
+            },
+            section: {
+              type: "string",
+              description: "Refile into this section. Omit to keep each todo's section. An empty string clears it.",
+            },
+            json: jsonOption,
+          },
+          async run({ positionals, options }, ctx) {
+            const input = parseCli(reorderTodosInput, {
+              ids: positionals.ids.map((id) => cliTodoId(id)),
+              beforeId: options.before === undefined ? undefined : cliTodoId(options.before),
+              bucket: options.bucket,
+              listName: options.list,
+              sectionName: options.section,
+            });
+            const result = await cliCall(() => placeTodos(input, revisionActor(ctx)));
+            const human = !result.changed
+              ? `Already in place: ${result.ids.join(", ")}`
+              : input.beforeId === undefined
+                ? `Moved ${result.ids.join(", ")} to the end`
+                : `Moved ${result.ids.join(", ")} before ${input.beforeId}`;
+            return reply(result, options.json, () => human);
+          },
+        }),
+
+        batch: cliCommand({
+          summary: "Complete, delete, or refile several formal todos in one undoable change",
+          positionals: [
+            {
+              name: "action",
+              description: "complete, delete, or move",
+              required: true,
+            },
+            {
+              name: "ids",
+              description: "Formal todo ids",
+              required: true,
+              variadic: true,
+            },
+          ],
+          options: {
+            bucket: {
+              type: "enum",
+              values: ["focus", "later", "waiting"],
+              description: "Destination bucket. Only valid with move. Omitted keeps each todo's bucket.",
+            },
+            list: {
+              type: "string",
+              description: "Destination project list. Only valid with move. An empty string clears it.",
+            },
+            section: {
+              type: "string",
+              description: "Destination section. Only valid with move. An empty string clears it.",
+            },
+            json: jsonOption,
+          },
+          async run({ positionals, options }, ctx) {
+            const input = parseCli(batchTodosInput, {
+              action: positionals.action,
+              ids: positionals.ids.map((id) => cliTodoId(id)),
+              bucket: options.bucket,
+              listName: options.list,
+              sectionName: options.section,
+            });
+            const result = await cliCall(() => batchTodos(input, revisionActor(ctx)));
+            const human =
+              result.action === "complete"
+                ? `Completed ${result.ids.join(", ")}`
+                : result.action === "delete"
+                  ? `Deleted ${result.ids.join(", ")}`
+                  : result.changed
+                    ? `Moved ${result.ids.join(", ")}`
+                    : `Already in place: ${result.ids.join(", ")}`;
+            return reply(result, options.json, () => human);
           },
         }),
 

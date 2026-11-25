@@ -120,6 +120,8 @@ thread; do not treat a missing link as an error if `bb todo show <id>` lists it.
 - `bb todo start <id> [--project <projectId>] [--prompt <extra>] [--json]`
 - `bb todo done <id> [--note <text>] [--json]` / `bb todo reopen <id> [--json]`
 - `bb todo update <id> [--title <text>] [--bucket focus|later|waiting] [--list <name>] [--section <name>] [--notes <text>] [--json]`
+- `bb todo move <id>... [--before <id>] [--bucket focus|later|waiting] [--list <name>] [--section <name>] [--json]`
+- `bb todo batch complete|delete|move <id>... [--bucket focus|later|waiting] [--list <name>] [--section <name>] [--json]`
 - `bb todo color <list> <blue|orange|green|purple|rose|teal|amber|indigo> [--json]`
 - `bb todo rm <id> [--json]`
 - `bb todo scan [--list <name>] [--section <name>] [--json]`
@@ -135,6 +137,17 @@ of failing. New work should always use `--notes` or put the detail in the title.
 Project lists use eight palette colors. The first eight lists each get a
 different color; later lists reuse a stable hash. `bb todo color` changes one
 list without moving its todos.
+
+`bb todo move` places those formal todos, in the given order, immediately
+before `--before` in that bucket. Without `--before` they append to the
+bucket, or to the `--list` / `--section` group when those flags are set.
+Omitting `--list` or `--section` keeps each todo's current value; an empty
+string clears it. `bb todo batch` completes, deletes, or refiles every id in
+one undoable change. `move` requires at least one of `--bucket`, `--list`, and
+`--section`, and changes only the fields you pass. The panel drag handle calls
+`move`. Shift-click selects the visible range and Ctrl/Cmd-click toggles one
+row; the batch bar calls `batch`. Agents use these commands rather than the
+panel.
 
 `bb todo rm` soft-deletes. Logs and linked threads stay in the database.
 `bb todo history` shows recent creates, edits, completions, triage, and
