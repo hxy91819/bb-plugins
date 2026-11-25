@@ -50,13 +50,13 @@ method names and metadata are confined to that adapter.
 CodeBuddy support is verified without invoking a model: after initialize the
 adapter sends `session/steer` with missing parameters and checks the extension's
 specific invalid-parameters response. Missing or timed-out support advertises
-`midTurnSteering=false`; the existing BB interrupt fallback remains available.
+`midTurnSteering=false`; BB can queue those follow-ups until the active prompt finishes.
 This is a provider extension, not a universal ACP steering method.
 
 For an active run, ordinary text steering is bound to its observed request ID.
 Success requires both admission and a matching user-message insertion receipt
 from that run. It does not cancel the current tool. Commands, images and inputs
-whose run ownership is not yet known request interrupt delivery. If the
+whose run ownership is not yet known require a separate prompt. If the
 original prompt completes first, the proxy still waits for the steer admission
 reply so an explicit idle or stale rejection can use BB's fallback. An
 ambiguous admission timeout or a missing insertion receipt fails visibly
@@ -94,7 +94,7 @@ Prepare a launch with `--adapter dsh` and a downstream `dsh --profile acp` comma
 
 The runner loads `@hxy91819/dsh-plugins/acp-steering/source` from an exact revision, writes an isolated temporary DSH overlay and gives the DSH child a private inherited duplex pipe at descriptor 3. It requires the companion's startup handshake before advertising `_meta.midTurnSteering`. The companion calls the public `agent.steer()` API with immutable user messages; DSH owns durable inbox writes and consumption. No network listener or model tool is added. This transport targets Linux and macOS.
 
-The first prompt stays on official ACP. Concurrent text prompts match the active text prompt to its newly appended ordinary user-message identity and wait for that exact message to be claimed, then enter the native next-step inbox without cancelling the running tool. They settle with the official prompt after output and descendants drain, and only a matching inbox claim counts as delivery. Cross-pipe responses are ordered with a companion receipt barrier. An admitted input that remains unclaimed is removed from the native inbox at settlement and reports an error before the original prompt completes; BB therefore cannot count it as delivered. Explicit Stop still returns `cancelled`. If the root has already gone idle, the input becomes an ordinary prompt after the preceding ACP request settles. Non-text concurrent content or a non-text active prompt requests interrupt delivery; ordinary prompts retain official image and resource handling. Admission or transport failures are reported without replaying possibly delivered input.
+The first prompt stays on official ACP. Concurrent text prompts match the active text prompt to its newly appended ordinary user-message identity and wait for that exact message to be claimed, then enter the native next-step inbox without cancelling the running tool. They settle with the official prompt after output and descendants drain, and only a matching inbox claim counts as delivery. Cross-pipe responses are ordered with a companion receipt barrier. When an admitted input remains unclaimed, the adapter removes it from the native inbox and reports an error before the original prompt completes. Explicit Stop returns `cancelled`. If the root has already gone idle, the input becomes an ordinary prompt after the preceding ACP request settles. Non-text concurrent content or a non-text active prompt requires separate delivery after the active prompt finishes. Ordinary prompts retain official image and resource handling. Admission or transport failures are reported without replaying possibly delivered input.
 
 Stop and session close also cancel through the ordered private pipe so a late steer cannot escape cancellation across the two transports. The runner removes its temporary source and overlay when the child closes. Updating the plugin requires re-running launch preparation; running DSH processes keep their old implementation until restarted or resumed.
 
