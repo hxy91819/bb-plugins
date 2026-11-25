@@ -114,7 +114,7 @@ repeats the page title.
   in `localStorage` (`bb-plugin-todo:view-state:v1`), so leaving for a session
   and coming back keeps the same view. A persisted filter whose list no longer
   exists in the snapshot falls back to “全部” after the first load.
-- **Rows**: the round checkbox uses the list color. The grip before it drags
+- **Rows**: the round checkbox uses the list color. It is `1rem` and centered on the `1.25rem` first line, matching the title glyph rather than filling the line box. The grip before it drags
   one row, or the current selection, to a new position. In the grouped view the
   drop also adopts that list and section; the flat view only changes order
   inside the bucket. Shift-click selects the visible range, and Ctrl/Cmd-click
@@ -203,8 +203,9 @@ From this directory with the pinned BB runtime:
 npm run typecheck
 npm test
 npm run build
-bb plugin types --check
 ```
+
+`bb plugin types --check` is not part of this gate. The current CLI exits 1 while `@get-bb/plugin-sdk` stays a devDependency; do not move that pin just to satisfy the check.
 
 `server.test.ts` uses `createFakePluginHost`, whose isolated temp-dir database
 is removed by `harness.lifecycle.dispose()`; no fixture database is written into
