@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 const binary = process.env.AGY_BIN || "agy";
-const state = join(homedir(), ".agy-acp");
+const state = process.env.AGY_ACP_STATE_DIR || join(homedir(), ".agy-acp");
 const cache = join(state, "models.json");
 let populated = false;
 try {
